@@ -49,3 +49,5 @@ The server auto-creates a `users` table on startup if it does not exist.
 
 - Passwords are hashed using Argon2id.
 - JWT is returned in JSON response (for production prefer secure `httpOnly` cookies).
+- When `dist/` exists, backend serves the built React app and supports SPA routing.
+- In production, OAuth callbacks auto-detect public host if `FRONTEND_URL` is still localhost.

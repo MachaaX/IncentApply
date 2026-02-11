@@ -29,8 +29,65 @@ npm run dev
 - `npm run backend:start` - start backend auth server
 - `npm run build` - typecheck and production build
 - `npm run preview` - preview production build
+- `npm run deploy:azure` - deploy/update a public Azure Container App
 - `npm run test` - run test suite once
 - `npm run test:watch` - run tests in watch mode
+
+## Deploy To Azure (Web Service)
+
+Recommended for your student credits: Azure Container Apps with `min-replicas=0` and `max-replicas=1` for low idle cost.
+
+### Prerequisites
+
+- Azure CLI installed
+- Logged in with a subscription that has your student credits:
+  - `az login`
+  - `az account set --subscription "<your-subscription-id-or-name>"`
+
+### One-time setup
+
+Pick globally unique names and export:
+
+```bash
+export AZURE_RESOURCE_GROUP=rg-incentapply
+export AZURE_LOCATION=eastus
+export AZURE_ACR_NAME=incentapplyacr123
+export AZURE_CONTAINERAPP_ENV=cae-incentapply
+export AZURE_CONTAINERAPP_NAME=incentapply-web
+```
+
+Optional auth/data envs (recommended for persistence/auth):
+
+```bash
+export DATABASE_URL="<your-postgres-connection-string>"
+export JWT_SECRET="<strong-random-secret>"
+export GOOGLE_CLIENT_ID="<google-client-id>"
+export GOOGLE_CLIENT_SECRET="<google-client-secret>"
+export GOOGLE_REDIRECT_URI="https://<your-public-domain>/api/auth/google/callback"
+```
+
+### Deploy
+
+```bash
+npm run deploy:azure
+```
+
+This builds and pushes a Docker image to ACR, creates/updates Container App resources, and prints your public URL.
+
+### Optional GitHub Auto-Deploy
+
+After the first deploy, you can generate a GitHub Actions workflow from Azure CLI:
+
+```bash
+az containerapp github-action add \
+  --name "$AZURE_CONTAINERAPP_NAME" \
+  --resource-group "$AZURE_RESOURCE_GROUP" \
+  --repo-url "https://github.com/<owner>/<repo>" \
+  --branch "main" \
+  --registry-url "$(az acr show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_ACR_NAME" --query loginServer -o tsv)"
+```
+
+Detailed guide: `docs/azure-container-apps.md`
 
 ## Implemented Pages
 

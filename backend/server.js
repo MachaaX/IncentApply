@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { config as loadEnv } from "dotenv";
 
 import cors from "cors";
@@ -30,6 +31,10 @@ function loadEnvironmentFiles() {
 loadEnvironmentFiles();
 
 const app = express();
+const backendDir = fileURLToPath(new URL(".", import.meta.url));
+const projectRoot = resolve(backendDir, "..");
+const frontendDistDir = resolve(projectRoot, "dist");
+const frontendIndexFile = resolve(frontendDistDir, "index.html");
 
 const PORT = Number(process.env.PORT ?? 4000);
 const FRONTEND_URL = process.env.FRONTEND_URL ?? "http://localhost:5173";
@@ -684,6 +689,43 @@ function parseOAuthState(stateEncoded) {
   return { redirectPath, mode };
 }
 
+function isLocalFrontendUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+  } catch {
+    return false;
+  }
+}
+
+function resolveFrontendBaseUrl(req) {
+  const configuredUrl = FRONTEND_URL;
+  const shouldAutoDetectHost =
+    process.env.NODE_ENV === "production" && isLocalFrontendUrl(configuredUrl);
+
+  if (!shouldAutoDetectHost && configuredUrl) {
+    return configuredUrl;
+  }
+
+  const forwardedProtoHeader = req.headers["x-forwarded-proto"];
+  const forwardedProto = Array.isArray(forwardedProtoHeader)
+    ? forwardedProtoHeader[0]
+    : forwardedProtoHeader;
+  const protocol = forwardedProto ?? req.protocol ?? "https";
+
+  const forwardedHostHeader = req.headers["x-forwarded-host"];
+  const forwardedHost = Array.isArray(forwardedHostHeader)
+    ? forwardedHostHeader[0]
+    : forwardedHostHeader;
+  const host = forwardedHost ?? req.get("host");
+
+  if (!host) {
+    return configuredUrl;
+  }
+
+  return `${protocol}://${host}`;
+}
+
 function renderPopupBridge(res, payload, fallbackUrl) {
   const safePayload = JSON.stringify(payload).replace(/</g, "\\u003c");
   const safeFallbackUrl = JSON.stringify(fallbackUrl).replace(/</g, "\\u003c");
@@ -855,6 +897,7 @@ app.post("/api/auth/entra/exchange", async (req, res) => {
 app.get("/api/auth/google/callback", async (req, res) => {
   const stateEncoded = typeof req.query.state === "string" ? req.query.state : "";
   const oauthState = parseOAuthState(stateEncoded);
+  const frontendBaseUrl = resolveFrontendBaseUrl(req);
 
   try {
     const oauthError = typeof req.query.error === "string" ? req.query.error : "";
@@ -872,7 +915,7 @@ app.get("/api/auth/google/callback", async (req, res) => {
 
     // For SPA convenience in development this redirects with token.
     // In production prefer httpOnly secure cookies instead of query params.
-    const redirectUrl = new URL(oauthState.redirectPath, FRONTEND_URL);
+    const redirectUrl = new URL(oauthState.redirectPath, frontendBaseUrl);
     redirectUrl.searchParams.set("token", auth.token);
     redirectUrl.searchParams.set("email", auth.user.email);
 
@@ -891,7 +934,7 @@ app.get("/api/auth/google/callback", async (req, res) => {
     return res.redirect(302, redirectUrl.toString());
   } catch (error) {
     if (oauthState.mode === "popup") {
-      const fallbackUrl = new URL("/auth/login", FRONTEND_URL);
+      const fallbackUrl = new URL("/auth/login", frontendBaseUrl);
       fallbackUrl.searchParams.set("oauthError", "1");
       fallbackUrl.searchParams.set(
         "message",
@@ -909,7 +952,7 @@ app.get("/api/auth/google/callback", async (req, res) => {
       );
     }
 
-    const fallbackUrl = new URL("/auth/login", FRONTEND_URL);
+    const fallbackUrl = new URL("/auth/login", frontendBaseUrl);
     fallbackUrl.searchParams.set("oauthError", "1");
     fallbackUrl.searchParams.set(
       "message",
@@ -951,6 +994,7 @@ app.get("/api/auth/entra/url", async (req, res) => {
 app.get("/api/auth/entra/callback", async (req, res) => {
   const stateEncoded = typeof req.query.state === "string" ? req.query.state : "";
   const oauthState = parseOAuthState(stateEncoded);
+  const frontendBaseUrl = resolveFrontendBaseUrl(req);
 
   try {
     const oauthError = typeof req.query.error === "string" ? req.query.error : "";
@@ -966,7 +1010,7 @@ app.get("/api/auth/entra/callback", async (req, res) => {
     const user = await exchangeEntraCode(code);
     const auth = buildAuthResponse(user);
 
-    const redirectUrl = new URL(oauthState.redirectPath, FRONTEND_URL);
+    const redirectUrl = new URL(oauthState.redirectPath, frontendBaseUrl);
     redirectUrl.searchParams.set("token", auth.token);
     redirectUrl.searchParams.set("email", auth.user.email);
 
@@ -985,7 +1029,7 @@ app.get("/api/auth/entra/callback", async (req, res) => {
     return res.redirect(302, redirectUrl.toString());
   } catch (error) {
     if (oauthState.mode === "popup") {
-      const fallbackUrl = new URL("/auth/login", FRONTEND_URL);
+      const fallbackUrl = new URL("/auth/login", frontendBaseUrl);
       fallbackUrl.searchParams.set("oauthError", "1");
       fallbackUrl.searchParams.set(
         "message",
@@ -1003,7 +1047,7 @@ app.get("/api/auth/entra/callback", async (req, res) => {
       );
     }
 
-    const fallbackUrl = new URL("/auth/login", FRONTEND_URL);
+    const fallbackUrl = new URL("/auth/login", frontendBaseUrl);
     fallbackUrl.searchParams.set("oauthError", "1");
     fallbackUrl.searchParams.set(
       "message",
@@ -1037,6 +1081,18 @@ app.get("/api/auth/me", authMiddleware, async (req, res) => {
     return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to fetch profile." });
   }
 });
+
+if (existsSync(frontendIndexFile)) {
+  app.use(express.static(frontendDistDir));
+
+  // Serve the SPA shell for non-API routes in production/container deployments.
+  app.get("*", (req, res, next) => {
+    if (req.path.startsWith("/api")) {
+      return next();
+    }
+    return res.sendFile(frontendIndexFile);
+  });
+}
 
 try {
   await initDb();
