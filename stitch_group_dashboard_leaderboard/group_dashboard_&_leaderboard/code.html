@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Group Dashboard &amp; Leaderboard</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#11d493",
+                        "background-light": "#f6f8f7",
+                        "background-dark": "#10221c",
+                        "card-dark": "#162e25", // Slightly lighter than bg-dark for cards
+                    },
+                    fontFamily: {
+                        "display": ["Manrope", "sans-serif"]
+                    },
+                    borderRadius: {"DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px"},
+                },
+            },
+        }
+    </script>
+<style>
+        body {
+            font-family: 'Manrope', sans-serif;
+        }
+        /* Custom scrollbar for table if needed */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: rgba(17, 212, 147, 0.05);
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(17, 212, 147, 0.2);
+            border-radius: 99px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(17, 212, 147, 0.4);
+        }
+    </style>
+</head>
+<body class="bg-background-light dark:bg-background-dark text-slate-800 dark:text-white font-display min-h-screen flex overflow-hidden">
+<!-- Sidebar Navigation -->
+<aside class="w-64 border-r border-primary/10 bg-background-light dark:bg-background-dark flex-shrink-0 flex flex-col justify-between h-screen fixed left-0 top-0 z-20 hidden lg:flex">
+<!-- Logo & Nav -->
+<div>
+<div class="h-20 flex items-center px-6 border-b border-primary/10">
+<div class="flex items-center gap-2">
+<div class="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
+<span class="material-icons text-background-dark text-xl font-bold">rocket_launch</span>
+</div>
+<span class="text-xl font-bold tracking-tight text-slate-900 dark:text-white">AppQuest</span>
+</div>
+</div>
+<nav class="p-4 space-y-1">
+<a class="flex items-center gap-3 px-4 py-3 rounded-xl bg-primary/10 text-primary font-semibold transition-colors" href="#">
+<span class="material-icons">dashboard</span>
+                    Dashboard
+                </a>
+<a class="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-slate-100 dark:hover:bg-primary/5 text-slate-500 dark:text-slate-400 dark:hover:text-primary transition-colors" href="#">
+<span class="material-icons">account_balance_wallet</span>
+                    Wallet
+                </a>
+<a class="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-slate-100 dark:hover:bg-primary/5 text-slate-500 dark:text-slate-400 dark:hover:text-primary transition-colors" href="#">
+<span class="material-icons">settings</span>
+                    Settings
+                </a>
+</nav>
+</div>
+<!-- Personal Wallet & Risk Card -->
+<div class="p-4">
+<div class="bg-card-dark rounded-2xl p-5 border border-primary/10 shadow-lg relative overflow-hidden group">
+<!-- Decorative background elements -->
+<div class="absolute top-0 right-0 w-24 h-24 bg-primary/5 rounded-full blur-2xl -mr-10 -mt-10 pointer-events-none"></div>
+<div class="relative z-10">
+<div class="flex items-center gap-3 mb-4">
+<img alt="User profile picture" class="w-10 h-10 rounded-full border-2 border-primary/30 object-cover" data-alt="Close up portrait of a young man" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDVifi119bQECdldXz3rd1dyGz-F8E0qOfvriqdKmk_Kw2axf_4bgN7Z_aL-rB9o3rCtC7I7Ex0neXldhJbb4He4D6AiroK4b_FJk3j1UQfpDovptGyKAQ3Ra6bpyBiLtMQozIyNFsfV_r5FvWM0uUHgRAhzkBzOJyLqmCE-5H-WocHaB-reeWABiHj7F9-0Vuzftf_YHulzKnqkoYgiiKvck3YO1POj8TstcWXrxDiqz6S6rBtx0p0Z1y5j1iSL0bHVych-5pg1ls"/>
+<div>
+<p class="text-sm font-medium text-slate-400">Welcome back,</p>
+<p class="font-bold text-white leading-none">Alex D.</p>
+</div>
+</div>
+<div class="space-y-4">
+<div>
+<p class="text-xs text-slate-400 uppercase tracking-wider font-semibold mb-1">Your Balance</p>
+<div class="text-2xl font-bold text-white">$120.00</div>
+</div>
+<div class="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
+<div class="flex items-center justify-between mb-1">
+<span class="text-xs font-bold text-red-400 uppercase">Penalty Risk</span>
+<span class="material-icons text-red-500 text-sm">warning</span>
+</div>
+<p class="text-xs text-red-300">You are 2 apps behind schedule.</p>
+</div>
+</div>
+</div>
+</div>
+<button class="w-full mt-4 flex items-center justify-center gap-2 bg-primary/10 hover:bg-primary/20 text-primary p-3 rounded-lg text-sm font-semibold transition-colors">
+<span class="material-icons text-sm">logout</span> Log Out
+            </button>
+</div>
+</aside>
+<!-- Main Content -->
+<main class="flex-1 lg:ml-64 relative min-h-screen">
+<!-- Top Bar (Mobile/Tablet only logo, Desktop context) -->
+<header class="h-20 border-b border-primary/10 bg-background-light/80 dark:bg-background-dark/80 backdrop-blur-md sticky top-0 z-10 px-6 flex items-center justify-between">
+<div class="lg:hidden flex items-center gap-2">
+<div class="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
+<span class="material-icons text-background-dark text-lg font-bold">rocket_launch</span>
+</div>
+<span class="font-bold text-lg dark:text-white">AppQuest</span>
+</div>
+<div class="hidden lg:block">
+<h1 class="text-xl font-bold text-slate-900 dark:text-white">Weekly Challenge: <span class="text-primary">Week 42</span></h1>
+<p class="text-sm text-slate-500 dark:text-slate-400">Keep up the pace to secure your share of the pot.</p>
+</div>
+<div class="flex items-center gap-4">
+<button class="flex items-center gap-2 bg-primary hover:bg-primary/90 text-background-dark px-4 py-2 rounded-lg font-bold transition-transform active:scale-95 shadow-lg shadow-primary/20">
+<span class="material-icons text-lg">add_circle</span>
+<span class="hidden sm:inline">Log Application</span>
+</button>
+<button class="p-2 rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-primary/10 dark:text-slate-400 transition-colors relative">
+<span class="material-icons">notifications</span>
+<span class="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border border-background-dark"></span>
+</button>
+</div>
+</header>
+<div class="p-6 max-w-7xl mx-auto space-y-8 pb-20">
+<!-- Hero Stats Row -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+<!-- Pot Total Card -->
+<div class="bg-card-dark border border-primary/10 rounded-2xl p-6 relative overflow-hidden">
+<div class="absolute -right-6 -top-6 w-32 h-32 bg-primary/10 rounded-full blur-3xl"></div>
+<div class="flex justify-between items-start mb-2 relative z-10">
+<h3 class="text-slate-400 font-medium text-sm uppercase tracking-wider">Pot Total</h3>
+<span class="bg-primary/10 text-primary text-xs font-bold px-2 py-1 rounded">Accumulating</span>
+</div>
+<div class="flex items-baseline gap-1 relative z-10">
+<span class="text-4xl font-extrabold text-white tracking-tight">$450.00</span>
+</div>
+<div class="mt-4 flex items-center gap-2 text-xs text-slate-400 relative z-10">
+<span class="material-icons text-primary text-sm">trending_up</span>
+<span>+$50 since yesterday</span>
+</div>
+</div>
+<!-- Time Remaining Card -->
+<div class="bg-card-dark border border-primary/10 rounded-2xl p-6 relative overflow-hidden">
+<div class="flex justify-between items-start mb-2">
+<h3 class="text-slate-400 font-medium text-sm uppercase tracking-wider">Time Remaining</h3>
+<span class="material-icons text-slate-600">timer</span>
+</div>
+<div class="flex items-center gap-3 mt-2">
+<div class="text-center">
+<span class="block text-2xl font-bold text-white font-mono bg-background-dark/50 rounded-lg p-2 min-w-[3rem]">02</span>
+<span class="text-[10px] uppercase text-slate-500 font-bold mt-1 block">Days</span>
+</div>
+<span class="text-xl font-bold text-slate-600 mb-4">:</span>
+<div class="text-center">
+<span class="block text-2xl font-bold text-white font-mono bg-background-dark/50 rounded-lg p-2 min-w-[3rem]">14</span>
+<span class="text-[10px] uppercase text-slate-500 font-bold mt-1 block">Hrs</span>
+</div>
+<span class="text-xl font-bold text-slate-600 mb-4">:</span>
+<div class="text-center">
+<span class="block text-2xl font-bold text-white font-mono bg-background-dark/50 rounded-lg p-2 min-w-[3rem]">45</span>
+<span class="text-[10px] uppercase text-slate-500 font-bold mt-1 block">Mins</span>
+</div>
+</div>
+</div>
+<!-- Group Progress Card -->
+<div class="bg-card-dark border border-primary/10 rounded-2xl p-6 flex flex-col justify-between">
+<div class="flex justify-between items-center mb-2">
+<h3 class="text-slate-400 font-medium text-sm uppercase tracking-wider">Group Goal</h3>
+<span class="text-white font-bold">128/150 Apps</span>
+</div>
+<div class="mt-2">
+<div class="flex items-end gap-2 mb-2">
+<span class="text-4xl font-bold text-primary">85%</span>
+<span class="text-sm text-slate-400 mb-1 font-medium">Complete</span>
+</div>
+<div class="w-full bg-background-dark rounded-full h-3 overflow-hidden">
+<div class="bg-primary h-3 rounded-full relative" style="width: 85%">
+<div class="absolute inset-0 bg-white/20 w-full h-full animate-pulse"></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Leaderboard Section -->
+<div class="bg-card-dark border border-primary/10 rounded-2xl overflow-hidden shadow-xl">
+<div class="p-6 border-b border-primary/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+<div>
+<h2 class="text-xl font-bold text-white">Leaderboard</h2>
+<p class="text-sm text-slate-400 mt-1">Top performers for Week 42 based on applications sent.</p>
+</div>
+<div class="flex gap-2">
+<button class="px-4 py-2 text-sm font-medium text-white bg-primary/20 hover:bg-primary/30 rounded-lg transition-colors">
+                            Current Week
+                        </button>
+<button class="px-4 py-2 text-sm font-medium text-slate-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors">
+                            Last Week
+                        </button>
+</div>
+</div>
+<div class="overflow-x-auto custom-scrollbar">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="bg-background-dark/50 text-xs uppercase tracking-wider text-slate-400 font-semibold border-b border-primary/5">
+<th class="p-5 w-16 text-center">Rank</th>
+<th class="p-5">Member</th>
+<th class="p-5">Status</th>
+<th class="p-5 text-right">Apps Sent</th>
+<th class="p-5 w-1/4">Progress</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-primary/5 text-sm">
+<!-- Rank 1 -->
+<tr class="hover:bg-primary/5 transition-colors group">
+<td class="p-5 text-center">
+<span class="inline-flex items-center justify-center w-8 h-8 rounded-full bg-yellow-500/20 text-yellow-400 font-bold border border-yellow-500/30">1</span>
+</td>
+<td class="p-5">
+<div class="flex items-center gap-3">
+<div class="relative">
+<img alt="Profile picture of Sarah M." class="w-10 h-10 rounded-full object-cover border-2 border-primary/20 group-hover:border-primary transition-colors" data-alt="Young woman smiling" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBgSbQDpH5GiC79Y-j46HsSkDSSX3gn1FxMJ5d3MBa1wLlKSysMOhCp0syUgryApiYqFfuiUB2PCJU3TMNALTqzroWk1GVdp28QaP57rNupg7MNKMnnzfH6ZiW28aKgIedq_NrNlgNWfdHEs1VJlplgCYYveVRHQTuysWgZ4ZbhXYUdXPntHPSVDwT5OMOY6NHlhElILkCfcj3oK7rCKbw3BDcab4ZTxreclyNmF4axn5_6LEill_rvm22kYPl1dVzjCiOppwHRof4"/>
+<span class="absolute -bottom-1 -right-1 bg-primary text-background-dark text-[10px] font-bold px-1.5 py-0.5 rounded-full border border-card-dark">MVP</span>
+</div>
+<div>
+<div class="font-bold text-white">Sarah M.</div>
+<div class="text-xs text-slate-500">Frontend Dev Role</div>
+</div>
+</div>
+</td>
+<td class="p-5">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-primary/20 text-primary border border-primary/20">
+<span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+                                        Crushing It
+                                    </span>
+</td>
+<td class="p-5 text-right font-mono text-white font-bold text-lg">
+                                    28 <span class="text-xs text-slate-500 font-sans font-normal ml-1">/ 25</span>
+</td>
+<td class="p-5">
+<div class="flex items-center gap-3">
+<div class="flex-1 bg-background-dark h-2 rounded-full overflow-hidden">
+<div class="bg-gradient-to-r from-primary to-emerald-300 h-full rounded-full w-full"></div>
+</div>
+<span class="text-xs font-bold text-primary">112%</span>
+</div>
+</td>
+</tr>
+<!-- Rank 2 -->
+<tr class="hover:bg-primary/5 transition-colors group">
+<td class="p-5 text-center">
+<span class="inline-flex items-center justify-center w-8 h-8 rounded-full bg-slate-700/50 text-slate-300 font-bold border border-slate-600/30">2</span>
+</td>
+<td class="p-5">
+<div class="flex items-center gap-3">
+<div class="relative">
+<img alt="Profile picture of Marcus J." class="w-10 h-10 rounded-full object-cover border-2 border-primary/20 group-hover:border-primary transition-colors" data-alt="Man with glasses portrait" src="https://lh3.googleusercontent.com/aida-public/AB6AXuB1UDHkw960FRFooCzgyUrsTjPvssBvIhm3rjxIF6PnYd3yge0zy5vfOvDyyWMIljIVUZg8odUP8tYPPX81H2iajWfj0Zdlh4gaGMRpNtHhJZdCzNbRtp1AOywqh2FibIzQKc4mn3XYnuzG2fhYNKEV4rp2XthM7jtDpj_30fKZHepu105Z2KGgeyGvzlWjyJFZU2eBZXNXrsqmV9GHq0k1Vyjt5v1vF-l7dj7_b6CMs2MHO1PsU--FM7lv7D_Anc90kPHvlKjWQ0U"/>
+</div>
+<div>
+<div class="font-bold text-white">Marcus J.</div>
+<div class="text-xs text-slate-500">Product Manager Role</div>
+</div>
+</div>
+</td>
+<td class="p-5">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                        On Track
+                                    </span>
+</td>
+<td class="p-5 text-right font-mono text-white font-bold text-lg">
+                                    22 <span class="text-xs text-slate-500 font-sans font-normal ml-1">/ 25</span>
+</td>
+<td class="p-5">
+<div class="flex items-center gap-3">
+<div class="flex-1 bg-background-dark h-2 rounded-full overflow-hidden">
+<div class="bg-primary h-full rounded-full" style="width: 88%"></div>
+</div>
+<span class="text-xs font-bold text-slate-300">88%</span>
+</div>
+</td>
+</tr>
+<!-- Rank 3 -->
+<tr class="hover:bg-primary/5 transition-colors group">
+<td class="p-5 text-center">
+<span class="inline-flex items-center justify-center w-8 h-8 rounded-full bg-slate-700/50 text-slate-300 font-bold border border-slate-600/30">3</span>
+</td>
+<td class="p-5">
+<div class="flex items-center gap-3">
+<div class="relative">
+<img alt="Profile picture of Elena R." class="w-10 h-10 rounded-full object-cover border-2 border-primary/20 group-hover:border-primary transition-colors" data-alt="Smiling woman portrait" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBfNs3naTNT5h_zUMmoTFBQG0G8I8QOqjI8-MwcoCWRFNeZpjtYBjzgrx9ExdytlzYn3ryRkpYBSxKcjFqL49nGBp37fOZVE0l5pSDa5HeXwi4TvgLlVoC-4ZZ-ZceARzFgZOD6Ss84H10FZ82j5C1YhBC60NZ9Z7EJbxVmVhixlhc5byT9WSAPZOAjjP84YOqOuIpvMFgQcKIvYCLgMuQBDJjKBjgtz_7lOIxSPHz7zRRDkMsg478DKzszEoFuQfuILD1Rdk47-Eg"/>
+</div>
+<div>
+<div class="font-bold text-white">Elena R.</div>
+<div class="text-xs text-slate-500">UX Designer Role</div>
+</div>
+</div>
+</td>
+<td class="p-5">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                        On Track
+                                    </span>
+</td>
+<td class="p-5 text-right font-mono text-white font-bold text-lg">
+                                    18 <span class="text-xs text-slate-500 font-sans font-normal ml-1">/ 25</span>
+</td>
+<td class="p-5">
+<div class="flex items-center gap-3">
+<div class="flex-1 bg-background-dark h-2 rounded-full overflow-hidden">
+<div class="bg-primary h-full rounded-full" style="width: 72%"></div>
+</div>
+<span class="text-xs font-bold text-slate-300">72%</span>
+</div>
+</td>
+</tr>
+<!-- Rank 4 (User - Highlighted) -->
+<tr class="bg-primary/5 border-l-4 border-primary hover:bg-primary/10 transition-colors group">
+<td class="p-5 text-center">
+<span class="inline-flex items-center justify-center w-8 h-8 rounded-full bg-slate-700/50 text-slate-300 font-bold border border-slate-600/30">4</span>
+</td>
+<td class="p-5">
+<div class="flex items-center gap-3">
+<div class="relative">
+<img alt="User profile picture" class="w-10 h-10 rounded-full object-cover border-2 border-primary" data-alt="Close up portrait of a young man" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDwPOJ_I6O7BLBfE8QfyVN7TfrdwoqsJ7NHI2MWtQ0g40pElCoTofr3g8vpB_hCDjhVQYrkyPGs7Rd2MCkc2paHp5Gzt0xXXJbXZ4SM-FPmw1N-DdynksFf1n_nOVlvYecLuUdIxlYEmll7PKRML55cf09Uxow6JgeGsxYjqTY0A_mGfn_WdQYvgQ310ArWzpbsS4h7O5bOyGDIetvWsxs2JrZ8w5x6-wzBC9Qywpuj9Y3xlZ0qQVo5nD85RYJA6VGJ5U8HTiuoc5o"/>
+<span class="absolute -top-2 -right-2 bg-slate-700 text-white text-[10px] font-bold px-1.5 py-0.5 rounded border border-slate-600">YOU</span>
+</div>
+<div>
+<div class="font-bold text-primary">Alex D.</div>
+<div class="text-xs text-slate-500">Full Stack Role</div>
+</div>
+</div>
+</td>
+<td class="p-5">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-red-500/10 text-red-400 border border-red-500/20 animate-pulse">
+                                        At Risk
+                                    </span>
+</td>
+<td class="p-5 text-right font-mono text-white font-bold text-lg">
+                                    12 <span class="text-xs text-slate-500 font-sans font-normal ml-1">/ 25</span>
+</td>
+<td class="p-5">
+<div class="flex items-center gap-3">
+<div class="flex-1 bg-background-dark h-2 rounded-full overflow-hidden">
+<div class="bg-red-500 h-full rounded-full" style="width: 48%"></div>
+</div>
+<span class="text-xs font-bold text-red-400">48%</span>
+</div>
+<div class="text-[10px] text-red-400/80 mt-1 font-medium">Needs 2 more today</div>
+</td>
+</tr>
+<!-- Rank 5 -->
+<tr class="hover:bg-primary/5 transition-colors group opacity-60 hover:opacity-100">
+<td class="p-5 text-center">
+<span class="inline-flex items-center justify-center w-8 h-8 rounded-full bg-slate-700/50 text-slate-300 font-bold border border-slate-600/30">5</span>
+</td>
+<td class="p-5">
+<div class="flex items-center gap-3">
+<div class="relative">
+<div class="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center text-slate-400 font-bold border-2 border-transparent group-hover:border-primary/20">DK</div>
+</div>
+<div>
+<div class="font-bold text-white">David K.</div>
+<div class="text-xs text-slate-500">Data Science Role</div>
+</div>
+</div>
+</td>
+<td class="p-5">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-700/30 text-slate-400 border border-slate-600/30">
+                                        Slow Start
+                                    </span>
+</td>
+<td class="p-5 text-right font-mono text-white font-bold text-lg">
+                                    08 <span class="text-xs text-slate-500 font-sans font-normal ml-1">/ 25</span>
+</td>
+<td class="p-5">
+<div class="flex items-center gap-3">
+<div class="flex-1 bg-background-dark h-2 rounded-full overflow-hidden">
+<div class="bg-slate-500 h-full rounded-full" style="width: 32%"></div>
+</div>
+<span class="text-xs font-bold text-slate-400">32%</span>
+</div>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<!-- Activity Feed (Optional extra context) -->
+<div class="mt-8">
+<h3 class="text-lg font-bold text-white mb-4 flex items-center gap-2">
+<span class="material-icons text-primary text-sm">bolt</span>
+                    Recent Activity
+                </h3>
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+<div class="bg-card-dark border border-primary/5 p-4 rounded-xl flex items-center gap-3">
+<div class="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary">
+<span class="material-icons text-sm">send</span>
+</div>
+<div class="text-sm">
+<span class="font-bold text-white">Sarah M.</span> applied to <span class="text-slate-300">Google</span>
+<div class="text-xs text-slate-500 mt-0.5">2 mins ago</div>
+</div>
+</div>
+<div class="bg-card-dark border border-primary/5 p-4 rounded-xl flex items-center gap-3">
+<div class="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary">
+<span class="material-icons text-sm">send</span>
+</div>
+<div class="text-sm">
+<span class="font-bold text-white">Marcus J.</span> applied to <span class="text-slate-300">Netflix</span>
+<div class="text-xs text-slate-500 mt-0.5">15 mins ago</div>
+</div>
+</div>
+<div class="bg-card-dark border border-primary/5 p-4 rounded-xl flex items-center gap-3 opacity-60">
+<div class="w-8 h-8 rounded-full bg-red-500/20 flex items-center justify-center text-red-500">
+<span class="material-icons text-sm">warning</span>
+</div>
+<div class="text-sm">
+<span class="font-bold text-white">Alex D.</span> is falling behind!
+                            <div class="text-xs text-slate-500 mt-0.5">1 hour ago</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+<!-- Mobile Bottom Nav (Visible only on small screens) -->
+<nav class="lg:hidden fixed bottom-0 left-0 w-full bg-background-dark border-t border-primary/10 z-50 px-6 py-3 flex justify-between items-center text-xs font-medium text-slate-400">
+<a class="flex flex-col items-center gap-1 text-primary" href="#">
+<span class="material-icons">dashboard</span>
+<span>Home</span>
+</a>
+<a class="flex flex-col items-center gap-1 hover:text-white transition-colors" href="#">
+<span class="material-icons">account_balance_wallet</span>
+<span>Wallet</span>
+</a>
+<div class="relative -top-6">
+<button class="bg-primary text-background-dark w-12 h-12 rounded-full flex items-center justify-center shadow-lg shadow-primary/30">
+<span class="material-icons font-bold">add</span>
+</button>
+</div>
+<a class="flex flex-col items-center gap-1 hover:text-white transition-colors" href="#">
+<span class="material-icons">emoji_events</span>
+<span>Rank</span>
+</a>
+<a class="flex flex-col items-center gap-1 hover:text-white transition-colors" href="#">
+<span class="material-icons">settings</span>
+<span>Settings</span>
+</a>
+</nav>
+</body></html>

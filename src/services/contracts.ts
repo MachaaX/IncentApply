@@ -1,0 +1,96 @@
+import type {
+  ApplicationLog,
+  AuthProvider,
+  AuthSession,
+  BankAccount,
+  GmailSyncState,
+  Group,
+  LeaderboardEntry,
+  MemberProgress,
+  PlatformConfig,
+  SettlementCycle,
+  SettlementResult,
+  User,
+  Wallet,
+  WeekWindow,
+  ActivityItem
+} from "../domain/types";
+
+export interface AuthService {
+  getSession(): Promise<AuthSession | null>;
+  getCurrentUser(): Promise<User | null>;
+  loginWithGoogle(email?: string): Promise<AuthSession>;
+  loginWithMicrosoft(email?: string): Promise<AuthSession>;
+  loginWithPassword(email: string, password: string): Promise<AuthSession>;
+  registerWithEmail(input: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    password: string;
+  }): Promise<AuthSession>;
+  logout(): Promise<void>;
+}
+
+export interface GroupService {
+  getCurrentGroup(): Promise<Group>;
+  getMembers(): Promise<User[]>;
+  getMemberProgress(weekId: string): Promise<MemberProgress[]>;
+  getLeaderboard(weekId: string): Promise<LeaderboardEntry[]>;
+  getActivityFeed(): Promise<ActivityItem[]>;
+  updateGoal(input: { weeklyGoal: number; adminGoalNote?: string }): Promise<Group>;
+  updateGroupName(name: string): Promise<Group>;
+  joinWithInviteCode(inviteCode: string): Promise<Group>;
+}
+
+export interface ApplicationService {
+  getCurrentWeekWindow(): Promise<WeekWindow>;
+  getLogsForWeek(weekId: string): Promise<ApplicationLog[]>;
+  createManualLog(input: {
+    company: string;
+    roleTitle: string;
+    note?: string;
+  }): Promise<ApplicationLog>;
+  updateManualLog(
+    id: string,
+    input: { company: string; roleTitle: string; note?: string }
+  ): Promise<ApplicationLog>;
+  deleteLog(id: string): Promise<void>;
+  getGmailSyncState(): Promise<GmailSyncState>;
+  connectGmail(): Promise<GmailSyncState>;
+  syncGmailNow(): Promise<{ state: GmailSyncState; created: ApplicationLog[] }>;
+}
+
+export interface WalletService {
+  getWallet(): Promise<Wallet>;
+  addBankAccount(input: {
+    bankName: string;
+    accountType: "checking" | "savings";
+    accountNumber: string;
+    routingNumber: string;
+    nickname?: string;
+  }): Promise<BankAccount>;
+  withdraw(input: { amountCents: number; bankAccountId: string }): Promise<Wallet>;
+}
+
+export interface SettlementService {
+  getCurrentCycle(): Promise<SettlementCycle>;
+  getHistory(): Promise<SettlementResult[]>;
+  simulateSettlementNow(): Promise<SettlementResult>;
+}
+
+export interface ConfigService {
+  getPlatformConfig(): Promise<PlatformConfig>;
+}
+
+export interface ServiceContainer {
+  authService: AuthService;
+  groupService: GroupService;
+  applicationService: ApplicationService;
+  walletService: WalletService;
+  settlementService: SettlementService;
+  configService: ConfigService;
+}
+
+export function buildFakeToken(email: string, provider: AuthProvider): string {
+  return `${provider}-${email.replace(/[^a-zA-Z0-9]/g, "")}-${Date.now()}`;
+}

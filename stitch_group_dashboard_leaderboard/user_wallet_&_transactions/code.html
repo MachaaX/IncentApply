@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>User Wallet &amp; Transactions</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#11d493",
+                        "background-light": "#f6f8f7",
+                        "background-dark": "#10221c",
+                        "surface-dark": "#162e26",
+                        "surface-darker": "#0d1a16",
+                    },
+                    fontFamily: {
+                        "display": ["Manrope", "sans-serif"]
+                    },
+                    borderRadius: {"DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px"},
+                },
+            },
+        }
+    </script>
+</head>
+<body class="bg-background-light dark:bg-background-dark text-slate-800 dark:text-slate-200 font-display min-h-screen flex flex-col">
+<!-- Top Navigation -->
+<nav class="w-full border-b border-primary/10 bg-white/5 dark:bg-surface-dark/50 backdrop-blur-md sticky top-0 z-50">
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+<div class="flex items-center justify-between h-16">
+<div class="flex items-center gap-2">
+<div class="w-8 h-8 rounded-lg bg-primary flex items-center justify-center text-background-dark font-bold text-xl">
+                        H
+                    </div>
+<span class="text-lg font-bold tracking-tight text-slate-900 dark:text-white">Hunt<span class="text-primary">Club</span></span>
+</div>
+<div class="hidden md:block">
+<div class="flex items-baseline space-x-8">
+<a class="text-slate-500 dark:text-slate-400 hover:text-primary dark:hover:text-primary px-3 py-2 rounded-md text-sm font-medium transition-colors" href="#">Dashboard</a>
+<a class="text-slate-500 dark:text-slate-400 hover:text-primary dark:hover:text-primary px-3 py-2 rounded-md text-sm font-medium transition-colors" href="#">Applications</a>
+<a class="bg-primary/10 text-primary px-3 py-2 rounded-md text-sm font-medium" href="#">Wallet</a>
+<a class="text-slate-500 dark:text-slate-400 hover:text-primary dark:hover:text-primary px-3 py-2 rounded-md text-sm font-medium transition-colors" href="#">Leaderboard</a>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<button class="p-2 text-slate-400 hover:text-primary transition-colors">
+<span class="material-icons">notifications</span>
+</button>
+<div class="w-8 h-8 rounded-full bg-surface-dark border border-primary/20 overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="User avatar profile picture" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBAPJ8QumPpMSzv_C38j-sp9I_G39GrQrzzibknmeyeDIT7n9yxE9Qr5TSsj67Qo-fu7Lo7J69bp-5zd9f3KvSgI56VIEshs66XMPK2Z48eqCzOkzdb0fBHm98iCHxZ4wA_Ye68Xaes7ees8W-XUgqyy0uVShNDrNQycC_vAJmkVdiqarZp0X3vT4Xr_qzft6IRc7UZMkEfLcNasZMpBlp9gfRDzlPJ8QO4YuOtLmMIS2K8qWw0Yh2nY3nGrZOLAWkkBvu4pdE3kWo"/>
+</div>
+</div>
+</div>
+</div>
+</nav>
+<!-- Main Content -->
+<main class="flex-grow w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+<header class="mb-8 flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+<div>
+<h1 class="text-3xl font-bold text-slate-900 dark:text-white">My Wallet</h1>
+<p class="mt-1 text-slate-500 dark:text-slate-400">Manage your weekly stakes, penalties, and winnings.</p>
+</div>
+<div class="flex items-center gap-2 px-4 py-2 bg-yellow-500/10 border border-yellow-500/20 rounded-lg text-yellow-500 text-sm font-medium">
+<span class="material-icons text-base">warning</span>
+<span>Goal Check-in: 2 Days Left</span>
+</div>
+</header>
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+<!-- LEFT COLUMN: Immediate Actions -->
+<div class="lg:col-span-5 space-y-6">
+<!-- Balance Card -->
+<div class="bg-white dark:bg-surface-dark rounded-xl p-6 border border-slate-200 dark:border-primary/10 shadow-lg relative overflow-hidden group">
+<!-- Decorative background glow -->
+<div class="absolute -right-10 -top-10 w-40 h-40 bg-primary/20 blur-[60px] rounded-full group-hover:bg-primary/30 transition-all duration-700"></div>
+<div class="relative z-10">
+<h2 class="text-sm font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Available Balance</h2>
+<div class="flex items-baseline gap-1 mb-6">
+<span class="text-5xl font-bold text-slate-900 dark:text-white tracking-tight">$145.00</span>
+<span class="text-lg text-slate-400 font-normal">USD</span>
+</div>
+<div class="grid grid-cols-2 gap-3 mb-6">
+<div class="bg-background-light dark:bg-background-dark p-3 rounded-lg border border-slate-100 dark:border-white/5">
+<span class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Weekly Stake</span>
+<span class="block text-lg font-semibold text-slate-900 dark:text-white">$20.00</span>
+</div>
+<div class="bg-background-light dark:bg-background-dark p-3 rounded-lg border border-slate-100 dark:border-white/5">
+<span class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Potential Win</span>
+<span class="block text-lg font-semibold text-primary">$320.00</span>
+</div>
+</div>
+<button class="w-full bg-primary hover:bg-primary/90 text-background-dark font-bold py-4 rounded-lg shadow-lg shadow-primary/20 transition-all hover:scale-[1.01] active:scale-[0.99] flex items-center justify-center gap-2">
+<span>Withdraw Funds</span>
+<span class="material-icons text-lg">arrow_outward</span>
+</button>
+</div>
+</div>
+<!-- Payment Method -->
+<div class="bg-white dark:bg-surface-dark rounded-xl p-6 border border-slate-200 dark:border-primary/10">
+<div class="flex justify-between items-center mb-4">
+<h3 class="font-semibold text-slate-900 dark:text-white">Linked Account</h3>
+<button class="text-xs text-primary hover:text-primary/80 font-medium">Manage</button>
+</div>
+<div class="flex items-center gap-4 p-4 rounded-lg bg-background-light dark:bg-background-dark border border-slate-200 dark:border-white/5">
+<div class="w-10 h-10 rounded-full bg-white dark:bg-surface-dark flex items-center justify-center shadow-sm">
+<span class="material-icons text-slate-500">account_balance</span>
+</div>
+<div class="flex-grow">
+<p class="font-bold text-slate-900 dark:text-white text-sm">Chase Checking</p>
+<p class="text-xs text-slate-500 dark:text-slate-400">Ending in •••• 8888</p>
+</div>
+<div class="h-2 w-2 rounded-full bg-green-500"></div>
+</div>
+<button class="mt-4 w-full py-2 border border-dashed border-slate-300 dark:border-slate-600 rounded-lg text-sm text-slate-500 dark:text-slate-400 hover:border-primary hover:text-primary transition-colors flex items-center justify-center gap-2">
+<span class="material-icons text-base">add</span>
+                        Connect New Method
+                    </button>
+</div>
+<!-- Quick Stats -->
+<div class="grid grid-cols-2 gap-4">
+<div class="bg-white dark:bg-surface-dark p-4 rounded-xl border border-slate-200 dark:border-primary/5">
+<div class="w-8 h-8 rounded-lg bg-green-500/10 flex items-center justify-center mb-3">
+<span class="material-icons text-green-500 text-sm">savings</span>
+</div>
+<p class="text-2xl font-bold text-slate-900 dark:text-white">$420</p>
+<p class="text-xs text-slate-500 dark:text-slate-400">Total Contributed</p>
+</div>
+<div class="bg-white dark:bg-surface-dark p-4 rounded-xl border border-slate-200 dark:border-primary/5">
+<div class="w-8 h-8 rounded-lg bg-red-500/10 flex items-center justify-center mb-3">
+<span class="material-icons text-red-500 text-sm">gavel</span>
+</div>
+<p class="text-2xl font-bold text-slate-900 dark:text-white">$15</p>
+<p class="text-xs text-slate-500 dark:text-slate-400">Total Penalties</p>
+</div>
+</div>
+</div>
+<!-- RIGHT COLUMN: History & Context -->
+<div class="lg:col-span-7 space-y-6">
+<!-- How It Works Banner -->
+<div class="relative overflow-hidden rounded-xl bg-gradient-to-r from-background-dark to-surface-dark border border-primary/20 p-6">
+<div class="absolute top-0 right-0 p-4 opacity-10">
+<span class="material-icons text-9xl text-primary transform rotate-12">emoji_events</span>
+</div>
+<h3 class="text-lg font-bold text-white mb-4 relative z-10">Weekly Pot Rules</h3>
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-4 relative z-10">
+<div class="flex flex-col gap-2">
+<span class="text-primary font-bold text-xl">01</span>
+<p class="text-sm text-slate-300">Every player contributes <span class="text-white font-medium">$20</span> to the weekly pot.</p>
+</div>
+<div class="flex flex-col gap-2">
+<span class="text-primary font-bold text-xl">02</span>
+<p class="text-sm text-slate-300">Hit your application goal (5/5) to keep your stake safe.</p>
+</div>
+<div class="flex flex-col gap-2">
+<span class="text-primary font-bold text-xl">03</span>
+<p class="text-sm text-slate-300">Miss the goal? Pay a <span class="text-red-400 font-medium">$5 penalty</span> to the winner's pot.</p>
+</div>
+</div>
+</div>
+<!-- Transaction History -->
+<div class="bg-white dark:bg-surface-dark rounded-xl border border-slate-200 dark:border-primary/10 flex flex-col h-full min-h-[400px]">
+<div class="p-6 border-b border-slate-200 dark:border-white/5 flex items-center justify-between">
+<h3 class="font-semibold text-slate-900 dark:text-white">Transaction History</h3>
+<div class="flex gap-2">
+<button class="px-3 py-1 text-xs rounded-full bg-primary/10 text-primary font-medium">All</button>
+<button class="px-3 py-1 text-xs rounded-full hover:bg-slate-100 dark:hover:bg-white/5 text-slate-500 dark:text-slate-400 transition-colors">Deductions</button>
+<button class="px-3 py-1 text-xs rounded-full hover:bg-slate-100 dark:hover:bg-white/5 text-slate-500 dark:text-slate-400 transition-colors">Winnings</button>
+</div>
+</div>
+<div class="flex-grow overflow-auto">
+<table class="w-full text-left text-sm">
+<thead class="bg-slate-50 dark:bg-surface-darker/50 text-slate-500 dark:text-slate-400 font-medium">
+<tr>
+<th class="px-6 py-4 font-medium">Date</th>
+<th class="px-6 py-4 font-medium">Description</th>
+<th class="px-6 py-4 font-medium">Status</th>
+<th class="px-6 py-4 font-medium text-right">Amount</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-slate-200 dark:divide-white/5">
+<tr class="group hover:bg-slate-50 dark:hover:bg-white/[0.02] transition-colors">
+<td class="px-6 py-4 text-slate-500 dark:text-slate-400">Oct 24, 2023</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary">
+<span class="material-icons text-sm">emoji_events</span>
+</div>
+<div>
+<span class="block text-slate-900 dark:text-white font-medium">Pot Win Share</span>
+<span class="block text-xs text-slate-500 dark:text-slate-500">Week 42 Winner Distribution</span>
+</div>
+</div>
+</td>
+<td class="px-6 py-4">
+<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
+                                            Completed
+                                        </span>
+</td>
+<td class="px-6 py-4 text-right font-bold text-primary">+$125.00</td>
+</tr>
+<tr class="group hover:bg-slate-50 dark:hover:bg-white/[0.02] transition-colors">
+<td class="px-6 py-4 text-slate-500 dark:text-slate-400">Oct 20, 2023</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-full bg-slate-100 dark:bg-white/10 flex items-center justify-center text-slate-500 dark:text-slate-400">
+<span class="material-icons text-sm">remove_circle_outline</span>
+</div>
+<div>
+<span class="block text-slate-900 dark:text-white font-medium">Weekly Stake</span>
+<span class="block text-xs text-slate-500 dark:text-slate-500">Buy-in for Week 42</span>
+</div>
+</div>
+</td>
+<td class="px-6 py-4">
+<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300">
+                                            Paid
+                                        </span>
+</td>
+<td class="px-6 py-4 text-right font-medium text-slate-900 dark:text-white">-$20.00</td>
+</tr>
+<tr class="group hover:bg-slate-50 dark:hover:bg-white/[0.02] transition-colors">
+<td class="px-6 py-4 text-slate-500 dark:text-slate-400">Oct 13, 2023</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-full bg-red-100 dark:bg-red-900/20 flex items-center justify-center text-red-500">
+<span class="material-icons text-sm">priority_high</span>
+</div>
+<div>
+<span class="block text-slate-900 dark:text-white font-medium">Penalty Fee</span>
+<span class="block text-xs text-slate-500 dark:text-slate-500">Missed Goal (3/5 Apps)</span>
+</div>
+</div>
+</td>
+<td class="px-6 py-4">
+<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300">
+                                            Deducted
+                                        </span>
+</td>
+<td class="px-6 py-4 text-right font-medium text-red-500">-$5.00</td>
+</tr>
+<tr class="group hover:bg-slate-50 dark:hover:bg-white/[0.02] transition-colors">
+<td class="px-6 py-4 text-slate-500 dark:text-slate-400">Oct 13, 2023</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-full bg-slate-100 dark:bg-white/10 flex items-center justify-center text-slate-500 dark:text-slate-400">
+<span class="material-icons text-sm">remove_circle_outline</span>
+</div>
+<div>
+<span class="block text-slate-900 dark:text-white font-medium">Weekly Stake</span>
+<span class="block text-xs text-slate-500 dark:text-slate-500">Buy-in for Week 41</span>
+</div>
+</div>
+</td>
+<td class="px-6 py-4">
+<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300">
+                                            Paid
+                                        </span>
+</td>
+<td class="px-6 py-4 text-right font-medium text-slate-900 dark:text-white">-$20.00</td>
+</tr>
+<tr class="group hover:bg-slate-50 dark:hover:bg-white/[0.02] transition-colors">
+<td class="px-6 py-4 text-slate-500 dark:text-slate-400">Oct 06, 2023</td>
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary">
+<span class="material-icons text-sm">account_balance_wallet</span>
+</div>
+<div>
+<span class="block text-slate-900 dark:text-white font-medium">Deposit</span>
+<span class="block text-xs text-slate-500 dark:text-slate-500">Initial Account Funding</span>
+</div>
+</div>
+</td>
+<td class="px-6 py-4">
+<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
+                                            Success
+                                        </span>
+</td>
+<td class="px-6 py-4 text-right font-medium text-primary">+$100.00</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="p-4 border-t border-slate-200 dark:border-white/5 bg-slate-50 dark:bg-surface-darker/30 rounded-b-xl flex justify-center">
+<button class="text-xs text-slate-500 dark:text-slate-400 hover:text-primary dark:hover:text-primary flex items-center gap-1 transition-colors">
+                            View All Transactions <span class="material-icons text-sm">arrow_forward</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</main>
+</body></html>
