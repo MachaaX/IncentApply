@@ -976,12 +976,37 @@ function getForwardedHeaderValue(value) {
   return "";
 }
 
+function isLocalHostName(host) {
+  if (!host) {
+    return false;
+  }
+  const normalized = String(host).trim().toLowerCase();
+  return (
+    normalized.startsWith("localhost") ||
+    normalized.startsWith("127.0.0.1") ||
+    normalized.startsWith("[::1]")
+  );
+}
+
+function resolveDeploymentFallbackOrigin(fallbackOrigin) {
+  const websiteHostname = process.env.WEBSITE_HOSTNAME?.trim();
+  if (websiteHostname && !isLocalHostName(websiteHostname)) {
+    return `https://${websiteHostname}`;
+  }
+  return fallbackOrigin;
+}
+
 function resolveRequestOrigin(req, fallbackOrigin) {
   const forwardedProto = getForwardedHeaderValue(req.headers["x-forwarded-proto"]);
   const protocol = forwardedProto || req.protocol || "https";
 
-  const forwardedHost = getForwardedHeaderValue(req.headers["x-forwarded-host"]);
-  const host = forwardedHost || req.get("host");
+  const hostCandidates = [
+    getForwardedHeaderValue(req.headers["x-forwarded-host"]),
+    getForwardedHeaderValue(req.headers["x-original-host"]),
+    getForwardedHeaderValue(req.headers["x-arr-original-host"]),
+    req.get("host")
+  ].filter(Boolean);
+  const host = hostCandidates.find((candidate) => !isLocalHostName(candidate)) || hostCandidates[0];
 
   if (!host) {
     return fallbackOrigin;
@@ -994,7 +1019,8 @@ function resolveFrontendBaseUrl(req) {
   const configuredUrl = FRONTEND_URL?.trim();
 
   if (!configuredUrl) {
-    return resolveRequestOrigin(req, "http://localhost:5173");
+    const deploymentFallback = resolveDeploymentFallbackOrigin("http://localhost:5173");
+    return resolveRequestOrigin(req, deploymentFallback);
   }
 
   if (!isLocalFrontendUrl(configuredUrl)) {
@@ -1002,11 +1028,11 @@ function resolveFrontendBaseUrl(req) {
   }
 
   const requestOrigin = resolveRequestOrigin(req, configuredUrl);
-  if (isLocalFrontendUrl(requestOrigin)) {
-    return configuredUrl;
+  if (!isLocalFrontendUrl(requestOrigin)) {
+    return requestOrigin;
   }
 
-  return requestOrigin;
+  return resolveDeploymentFallbackOrigin(configuredUrl);
 }
 
 function resolveGoogleRedirectUri(req) {
@@ -1025,9 +1051,16 @@ function resolveGoogleRedirectUri(req) {
 
   if (configuredRedirectUri && isLocalFrontendUrl(configuredRedirectUri)) {
     const requestOrigin = resolveRequestOrigin(req, configuredRedirectUri);
-    if (isLocalFrontendUrl(requestOrigin)) {
-      return configuredRedirectUri;
+    if (!isLocalFrontendUrl(requestOrigin)) {
+      return new URL("/api/auth/google/callback", requestOrigin).toString();
     }
+
+    const deploymentFallback = resolveDeploymentFallbackOrigin(configuredRedirectUri);
+    if (!isLocalFrontendUrl(deploymentFallback)) {
+      return new URL("/api/auth/google/callback", deploymentFallback).toString();
+    }
+
+    return configuredRedirectUri;
   }
 
   const callbackOrigin = resolveRequestOrigin(req, resolveFrontendBaseUrl(req));
