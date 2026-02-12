@@ -5,7 +5,7 @@ import { AuthButtons } from "../components/ui/AuthButtons";
 import { FormField } from "../components/ui/FormField";
 
 export function RegisterPage() {
-  const { registerWithEmail, signInWithGoogle, signInWithMicrosoft, loading } = useAuth();
+  const { registerWithEmail, signInWithGoogle, loading } = useAuth();
   const navigate = useNavigate();
   const [firstName, setFirstName] = useState("Jane");
   const [lastName, setLastName] = useState("Doe");
@@ -34,16 +34,6 @@ export function RegisterPage() {
     }
   };
 
-  const microsoft = async () => {
-    setError(null);
-    try {
-      await signInWithMicrosoft(email);
-      navigate("/dashboard", { replace: true });
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to continue with Microsoft.");
-    }
-  };
-
   return (
     <main className="flex min-h-screen items-center justify-center bg-background-dark px-4 text-white">
       <form onSubmit={submit} className="w-full max-w-lg space-y-5 rounded-2xl border border-primary/15 bg-surface-dark p-7">
@@ -63,12 +53,7 @@ export function RegisterPage() {
           required
         />
         {error ? <p className="text-sm text-red-300">{error}</p> : null}
-        <AuthButtons
-          onGoogle={google}
-          onMicrosoft={microsoft}
-          submitting={loading}
-          submitLabel="Create Account"
-        />
+        <AuthButtons onGoogle={google} submitting={loading} submitLabel="Create Account" />
         <p className="text-sm text-slate-400">
           Already have an account?{" "}
           <Link to="/auth/login" className="text-primary hover:underline">

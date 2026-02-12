@@ -59,7 +59,7 @@ export AZURE_CONTAINERAPP_NAME=incentapply-web
 Optional auth/data envs (recommended for persistence/auth):
 
 ```bash
-export DATABASE_URL="<your-postgres-connection-string>"
+export DATABASE_URL="<your-mysql-connection-string>"
 export JWT_SECRET="<strong-random-secret>"
 export GOOGLE_CLIENT_ID="<google-client-id>"
 export GOOGLE_CLIENT_SECRET="<google-client-secret>"
@@ -124,9 +124,8 @@ Mock adapters with localStorage persistence are implemented in `src/services/moc
 Backend auth server files are in `backend/` with:
 
 - Google OAuth signup/login support
-- Microsoft Entra External ID OAuth signup/login support
 - Email/password signup/login support
-- Postgres-backed user storage
+- MySQL/Postgres-backed user storage (MySQL recommended on Azure)
 - Argon2id password hashing
 
 Frontend is wired to backend auth through:

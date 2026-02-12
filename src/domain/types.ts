@@ -1,6 +1,6 @@
 export type Role = "owner" | "admin" | "member";
 
-export type AuthProvider = "google" | "microsoft" | "password";
+export type AuthProvider = "google" | "password";
 
 export interface User {
   id: string;

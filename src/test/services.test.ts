@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { services } from "../services/mock/mockServices";
 
 describe("mock services", () => {
-  it("supports google, microsoft, and password sign in", async () => {
+  it("supports google and password sign in", async () => {
     const byPassword = await services.authService.loginWithPassword(
       "alex@incentapply.dev",
       "password123"
@@ -11,9 +11,6 @@ describe("mock services", () => {
 
     const byGoogle = await services.authService.loginWithGoogle("alex@incentapply.dev");
     expect(byGoogle.provider).toBe("google");
-
-    const byMicrosoft = await services.authService.loginWithMicrosoft("alex@incentapply.dev");
-    expect(byMicrosoft.provider).toBe("microsoft");
   });
 
   it("validates withdrawal limits", async () => {

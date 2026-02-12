@@ -46,12 +46,6 @@ describe("auth routing", () => {
     expect(await screen.findByText(/Group Dashboard/i)).toBeInTheDocument();
   });
 
-  it("supports microsoft sign in flow", async () => {
-    renderApp("/auth/login");
-    fireEvent.click(await screen.findByRole("button", { name: /continue with microsoft/i }));
-    expect(await screen.findByText(/Group Dashboard/i)).toBeInTheDocument();
-  });
-
   it("clears session on logout", async () => {
     await services.authService.loginWithPassword("alex@incentapply.dev", "password123");
     renderApp("/dashboard");

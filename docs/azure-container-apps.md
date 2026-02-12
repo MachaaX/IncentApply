@@ -27,7 +27,7 @@ export AZURE_CONTAINERAPP_NAME=incentapply-web
 Optional but recommended:
 
 ```bash
-export DATABASE_URL="<postgres-connection-string>"
+export DATABASE_URL="<mysql-connection-string>"
 export JWT_SECRET="<strong-random-secret>"
 export GOOGLE_CLIENT_ID="<google-client-id>"
 export GOOGLE_CLIENT_SECRET="<google-client-secret>"
@@ -46,7 +46,6 @@ The script prints your public URL when done.
 After first deploy, update provider callbacks to:
 
 - Google: `https://<public-domain>/api/auth/google/callback`
-- Entra: `https://<public-domain>/api/auth/entra/callback`
 
 ## 5) Keep costs low
 

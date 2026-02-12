@@ -20,7 +20,6 @@ export interface AuthService {
   getSession(): Promise<AuthSession | null>;
   getCurrentUser(): Promise<User | null>;
   loginWithGoogle(email?: string): Promise<AuthSession>;
-  loginWithMicrosoft(email?: string): Promise<AuthSession>;
   loginWithPassword(email: string, password: string): Promise<AuthSession>;
   registerWithEmail(input: {
     firstName: string;

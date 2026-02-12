@@ -5,7 +5,7 @@ import { AuthButtons } from "../components/ui/AuthButtons";
 import { FormField } from "../components/ui/FormField";
 
 export function LoginPage() {
-  const { signInWithGoogle, signInWithMicrosoft, signInWithPassword, loading } = useAuth();
+  const { signInWithGoogle, signInWithPassword, loading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [email, setEmail] = useState("alex@incentapply.dev");
@@ -35,16 +35,6 @@ export function LoginPage() {
     }
   };
 
-  const microsoft = async () => {
-    setError(null);
-    try {
-      await signInWithMicrosoft(email);
-      navigate(from, { replace: true });
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to sign in with Microsoft.");
-    }
-  };
-
   return (
     <main className="flex min-h-screen items-center justify-center bg-background-dark px-4 text-white">
       <form onSubmit={submit} className="w-full max-w-md space-y-5 rounded-2xl border border-primary/15 bg-surface-dark p-7">
@@ -59,12 +49,7 @@ export function LoginPage() {
           required
         />
         {error ? <p className="text-sm text-red-300">{error}</p> : null}
-        <AuthButtons
-          onGoogle={google}
-          onMicrosoft={microsoft}
-          submitting={loading}
-          submitLabel="Log In"
-        />
+        <AuthButtons onGoogle={google} submitting={loading} submitLabel="Log In" />
         <p className="text-sm text-slate-400">
           New here?{" "}
           <Link to="/auth/register" className="text-primary hover:underline">

@@ -158,9 +158,6 @@ function sessionProviderFromAuthProvider(
   if (provider && provider.includes("google")) {
     return "google";
   }
-  if (provider && (provider.includes("entra") || provider.includes("microsoft"))) {
-    return "microsoft";
-  }
   return "password";
 }
 
@@ -314,10 +311,10 @@ function consumeTokenFromUrlIfPresent(): string | null {
   return token;
 }
 
-type OAuthProvider = "google" | "entra";
+type OAuthProvider = "google";
 
 function displayNameForProvider(provider: OAuthProvider): string {
-  return provider === "google" ? "Google" : "Microsoft Entra";
+  return provider === "google" ? "Google" : "OAuth";
 }
 
 function buildOAuthStartUrl(
@@ -587,15 +584,6 @@ function localLoginWithGoogle(email?: string): AuthSession {
   return createLocalSession(selectedUser.id, "google", `google-${Date.now()}`);
 }
 
-function localLoginWithMicrosoft(email?: string): AuthSession {
-  const state = getState();
-  const selectedUser =
-    state.users.find((user) => user.email.toLowerCase() === (email ?? "").toLowerCase()) ??
-    state.users[0];
-
-  return createLocalSession(selectedUser.id, "microsoft", `microsoft-${Date.now()}`);
-}
-
 function localLoginWithPassword(email: string, password: string): AuthSession {
   if (password.length < 8) {
     throw new Error("Password must be at least 8 characters.");
@@ -754,10 +742,6 @@ const authService: AuthService = {
 
   async loginWithGoogle(email) {
     return loginWithBackendOAuthProvider("google", () => localLoginWithGoogle(email));
-  },
-
-  async loginWithMicrosoft(email) {
-    return loginWithBackendOAuthProvider("entra", () => localLoginWithMicrosoft(email));
   },
 
   async loginWithPassword(email, password) {

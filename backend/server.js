@@ -52,6 +52,9 @@ const ENTRA_CLIENT_SECRET = process.env.ENTRA_CLIENT_SECRET;
 const ENTRA_REDIRECT_URI = process.env.ENTRA_REDIRECT_URI;
 const ENTRA_DISCOVERY_URL = process.env.ENTRA_DISCOVERY_URL;
 const ENTRA_SCOPES = process.env.ENTRA_SCOPES ?? "openid profile email";
+const entraConfiguredExplicitly = Boolean(
+  ENTRA_CLIENT_ID || ENTRA_CLIENT_SECRET || ENTRA_REDIRECT_URI || ENTRA_DISCOVERY_URL
+);
 if (!JWT_SECRET) {
   throw new Error("Missing JWT_SECRET in environment.");
 }
@@ -72,8 +75,77 @@ function createPostgresPool(connectionString) {
   });
 }
 
-let poolMode = DATABASE_URL ? "postgres" : "memory";
-let pool = DATABASE_URL ? createPostgresPool(DATABASE_URL) : createInMemoryPool();
+async function createMySqlPool(connectionString) {
+  let mysqlDriver;
+  try {
+    const mysqlModule = await import("mysql2/promise");
+    mysqlDriver = mysqlModule.default ?? mysqlModule;
+  } catch {
+    throw new Error(
+      "MySQL support requires `mysql2`. Run `npm install` and restart the backend."
+    );
+  }
+
+  const parsed = new URL(connectionString);
+  const host = parsed.hostname ?? "";
+  const ssl =
+    host.includes("azure.com") || host.includes("mysql.database.azure.com")
+      ? { minVersion: "TLSv1.2", rejectUnauthorized: false }
+      : undefined;
+
+  const mysqlPool = mysqlDriver.createPool({
+    uri: connectionString,
+    ssl,
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0
+  });
+
+  return {
+    async query(sql, params = []) {
+      const mysqlSql = sql.replace(/\$\d+/g, "?");
+      const [rows] = await mysqlPool.query(mysqlSql, params);
+
+      if (Array.isArray(rows)) {
+        return { rows };
+      }
+
+      return {
+        rows: [],
+        rowCount: typeof rows?.affectedRows === "number" ? rows.affectedRows : 0,
+        insertId: rows?.insertId
+      };
+    },
+    async end() {
+      await mysqlPool.end();
+    }
+  };
+}
+
+function resolvePoolMode(connectionString) {
+  if (!connectionString) {
+    return "memory";
+  }
+
+  const normalized = connectionString.toLowerCase();
+  if (normalized.startsWith("mysql://") || normalized.startsWith("mysql2://")) {
+    return "mysql";
+  }
+  return "postgres";
+}
+
+async function createPoolForMode(mode, connectionString) {
+  if (mode === "memory") {
+    return createInMemoryPool();
+  }
+  if (mode === "mysql") {
+    return createMySqlPool(connectionString);
+  }
+  return createPostgresPool(connectionString);
+}
+
+let poolMode = resolvePoolMode(DATABASE_URL);
+let pool = await createPoolForMode(poolMode, DATABASE_URL);
 
 function getMissingGoogleOAuthConfigKeys() {
   const missing = [];
@@ -107,6 +179,10 @@ function getGoogleOAuthNotConfiguredMessage() {
 }
 
 function getMissingEntraOAuthConfigKeys() {
+  if (!entraConfiguredExplicitly) {
+    return [];
+  }
+
   const missing = [];
   const idLooksLikeTemplate =
     typeof ENTRA_CLIENT_ID === "string" &&
@@ -212,6 +288,38 @@ app.use(
 app.use(express.json());
 
 async function initDb() {
+  if (poolMode === "mysql") {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id VARCHAR(191) PRIMARY KEY,
+        email VARCHAR(320) NOT NULL UNIQUE,
+        password_hash TEXT,
+        google_sub VARCHAR(191) UNIQUE,
+        entra_sub VARCHAR(191) UNIQUE,
+        first_name VARCHAR(191),
+        last_name VARCHAR(191),
+        avatar_url TEXT,
+        auth_provider VARCHAR(32) NOT NULL DEFAULT 'email',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    const entraColumn = await pool.query(`
+      SELECT COUNT(*) AS count
+      FROM information_schema.columns
+      WHERE table_schema = DATABASE()
+        AND table_name = 'users'
+        AND column_name = 'entra_sub'
+    `);
+
+    if (Number(entraColumn.rows[0]?.count ?? 0) === 0) {
+      await pool.query("ALTER TABLE users ADD COLUMN entra_sub VARCHAR(191) UNIQUE NULL");
+    }
+
+    return;
+  }
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -276,6 +384,19 @@ function buildAuthResponse(user) {
   };
 }
 
+async function getUserById(id) {
+  const result = await pool.query("SELECT * FROM users WHERE id = $1", [id]);
+  return result.rows[0] ?? null;
+}
+
+async function requireUserById(id) {
+  const user = await getUserById(id);
+  if (!user) {
+    throw new Error("Unable to load user after database write.");
+  }
+  return user;
+}
+
 async function getUserByEmail(email) {
   const result = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
   return result.rows[0] ?? null;
@@ -293,6 +414,21 @@ async function getUserByEntraSub(entraSub) {
 
 async function createEmailUser({ email, password, firstName, lastName }) {
   const passwordHash = await hash(password, PASSWORD_HASH_OPTIONS);
+  const id = randomUUID();
+
+  if (poolMode === "mysql") {
+    await pool.query(
+      `
+        INSERT INTO users (
+          id, email, password_hash, first_name, last_name, auth_provider
+        )
+        VALUES ($1, $2, $3, $4, $5, 'email')
+      `,
+      [id, email, passwordHash, firstName, lastName]
+    );
+    return requireUserById(id);
+  }
+
   const result = await pool.query(
     `
       INSERT INTO users (
@@ -301,15 +437,29 @@ async function createEmailUser({ email, password, firstName, lastName }) {
       VALUES ($1, $2, $3, $4, $5, 'email')
       RETURNING *
     `,
-    [randomUUID(), email, passwordHash, firstName, lastName]
+    [id, email, passwordHash, firstName, lastName]
   );
 
-  return result.rows[0];
+  return result.rows[0] ?? null;
 }
 
 async function attachPasswordToExistingUser(user, password) {
   const passwordHash = await hash(password, PASSWORD_HASH_OPTIONS);
   const nextProvider = user.google_sub || user.entra_sub ? "hybrid" : "email";
+
+  if (poolMode === "mysql") {
+    await pool.query(
+      `
+        UPDATE users
+        SET password_hash = $2,
+            auth_provider = $3,
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+      [user.id, passwordHash, nextProvider]
+    );
+    return requireUserById(user.id);
+  }
 
   const result = await pool.query(
     `
@@ -323,7 +473,7 @@ async function attachPasswordToExistingUser(user, password) {
     [user.id, passwordHash, nextProvider]
   );
 
-  return result.rows[0];
+  return result.rows[0] ?? null;
 }
 
 async function upsertGoogleUser(payload) {
@@ -336,6 +486,26 @@ async function upsertGoogleUser(payload) {
 
   const byGoogleSub = await getUserByGoogleSub(googleSub);
   if (byGoogleSub) {
+    if (poolMode === "mysql") {
+      await pool.query(
+        `
+          UPDATE users
+          SET first_name = COALESCE($2, first_name),
+              last_name = COALESCE($3, last_name),
+              avatar_url = COALESCE($4, avatar_url),
+              updated_at = NOW()
+          WHERE id = $1
+        `,
+        [
+          byGoogleSub.id,
+          payload.given_name ?? null,
+          payload.family_name ?? null,
+          payload.picture ?? null
+        ]
+      );
+      return requireUserById(byGoogleSub.id);
+    }
+
     const updated = await pool.query(
       `
         UPDATE users
@@ -354,12 +524,36 @@ async function upsertGoogleUser(payload) {
       ]
     );
 
-    return updated.rows[0];
+    return updated.rows[0] ?? null;
   }
 
   const byEmail = await getUserByEmail(email);
   if (byEmail) {
     const nextProvider = byEmail.password_hash || byEmail.entra_sub ? "hybrid" : "google";
+
+    if (poolMode === "mysql") {
+      await pool.query(
+        `
+          UPDATE users
+          SET google_sub = $2,
+              auth_provider = $3,
+              first_name = COALESCE($4, first_name),
+              last_name = COALESCE($5, last_name),
+              avatar_url = COALESCE($6, avatar_url),
+              updated_at = NOW()
+          WHERE id = $1
+        `,
+        [
+          byEmail.id,
+          googleSub,
+          nextProvider,
+          payload.given_name ?? null,
+          payload.family_name ?? null,
+          payload.picture ?? null
+        ]
+      );
+      return requireUserById(byEmail.id);
+    }
 
     const updated = await pool.query(
       `
@@ -383,7 +577,29 @@ async function upsertGoogleUser(payload) {
       ]
     );
 
-    return updated.rows[0];
+    return updated.rows[0] ?? null;
+  }
+
+  const id = randomUUID();
+
+  if (poolMode === "mysql") {
+    await pool.query(
+      `
+        INSERT INTO users (
+          id, email, google_sub, first_name, last_name, avatar_url, auth_provider
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, 'google')
+      `,
+      [
+        id,
+        email,
+        googleSub,
+        payload.given_name ?? null,
+        payload.family_name ?? null,
+        payload.picture ?? null
+      ]
+    );
+    return requireUserById(id);
   }
 
   const created = await pool.query(
@@ -395,7 +611,7 @@ async function upsertGoogleUser(payload) {
       RETURNING *
     `,
     [
-      randomUUID(),
+      id,
       email,
       googleSub,
       payload.given_name ?? null,
@@ -404,7 +620,7 @@ async function upsertGoogleUser(payload) {
     ]
   );
 
-  return created.rows[0];
+  return created.rows[0] ?? null;
 }
 
 async function exchangeGoogleCode(code) {
@@ -468,6 +684,26 @@ async function upsertEntraUser(payload) {
   const byEntraSub = await getUserByEntraSub(entraSub);
 
   if (byEntraSub) {
+    if (poolMode === "mysql") {
+      await pool.query(
+        `
+          UPDATE users
+          SET first_name = COALESCE($2, first_name),
+              last_name = COALESCE($3, last_name),
+              avatar_url = COALESCE($4, avatar_url),
+              updated_at = NOW()
+          WHERE id = $1
+        `,
+        [
+          byEntraSub.id,
+          payload.given_name ?? null,
+          payload.family_name ?? null,
+          payload.picture ?? null
+        ]
+      );
+      return requireUserById(byEntraSub.id);
+    }
+
     const updated = await pool.query(
       `
         UPDATE users
@@ -486,12 +722,36 @@ async function upsertEntraUser(payload) {
       ]
     );
 
-    return updated.rows[0];
+    return updated.rows[0] ?? null;
   }
 
   const byEmail = await getUserByEmail(email);
   if (byEmail) {
     const nextProvider = byEmail.password_hash || byEmail.google_sub ? "hybrid" : "entra";
+
+    if (poolMode === "mysql") {
+      await pool.query(
+        `
+          UPDATE users
+          SET entra_sub = $2,
+              auth_provider = $3,
+              first_name = COALESCE($4, first_name),
+              last_name = COALESCE($5, last_name),
+              avatar_url = COALESCE($6, avatar_url),
+              updated_at = NOW()
+          WHERE id = $1
+        `,
+        [
+          byEmail.id,
+          entraSub,
+          nextProvider,
+          payload.given_name ?? null,
+          payload.family_name ?? null,
+          payload.picture ?? null
+        ]
+      );
+      return requireUserById(byEmail.id);
+    }
 
     const updated = await pool.query(
       `
@@ -515,7 +775,29 @@ async function upsertEntraUser(payload) {
       ]
     );
 
-    return updated.rows[0];
+    return updated.rows[0] ?? null;
+  }
+
+  const id = randomUUID();
+
+  if (poolMode === "mysql") {
+    await pool.query(
+      `
+        INSERT INTO users (
+          id, email, entra_sub, first_name, last_name, avatar_url, auth_provider
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, 'entra')
+      `,
+      [
+        id,
+        email,
+        entraSub,
+        payload.given_name ?? null,
+        payload.family_name ?? null,
+        payload.picture ?? null
+      ]
+    );
+    return requireUserById(id);
   }
 
   const created = await pool.query(
@@ -527,7 +809,7 @@ async function upsertEntraUser(payload) {
       RETURNING *
     `,
     [
-      randomUUID(),
+      id,
       email,
       entraSub,
       payload.given_name ?? null,
@@ -536,7 +818,7 @@ async function upsertEntraUser(payload) {
     ]
   );
 
-  return created.rows[0];
+  return created.rows[0] ?? null;
 }
 
 async function exchangeEntraCode(code) {
@@ -1060,8 +1342,7 @@ app.get("/api/auth/entra/callback", async (req, res) => {
 app.get("/api/auth/me", authMiddleware, async (req, res) => {
   try {
     const userId = req.auth?.sub;
-    const result = await pool.query("SELECT * FROM users WHERE id = $1", [userId]);
-    const user = result.rows[0];
+    const user = userId ? await getUserById(userId) : null;
     if (!user) {
       return res.status(404).json({ error: "User not found." });
     }
@@ -1097,9 +1378,10 @@ if (existsSync(frontendIndexFile)) {
 try {
   await initDb();
 } catch (error) {
-  if (poolMode === "postgres") {
+  if (poolMode === "postgres" || poolMode === "mysql") {
+    const label = poolMode === "mysql" ? "MySQL" : "Postgres";
     console.warn(
-      "Postgres connection failed. Falling back to in-memory DB for local development."
+      `${label} connection failed. Falling back to in-memory DB for local development.`
     );
     console.warn(error instanceof Error ? error.message : String(error));
     try {
@@ -1120,13 +1402,19 @@ app.listen(PORT, () => {
   if (!process.env.JWT_SECRET && process.env.NODE_ENV !== "production") {
     console.warn("Using fallback development JWT secret. Set JWT_SECRET in .env for persistence.");
   }
+  if (poolMode === "mysql") {
+    console.log("Using MySQL auth database.");
+  }
+  if (poolMode === "postgres") {
+    console.log("Using Postgres auth database.");
+  }
   if (poolMode === "memory") {
     console.log("Using in-memory auth database (data resets on restart).");
   }
   if (!googleConfigured) {
     console.log(getGoogleOAuthNotConfiguredMessage());
   }
-  if (!entraConfigured) {
+  if (entraConfiguredExplicitly && !entraConfigured) {
     console.log(getEntraOAuthNotConfiguredMessage());
   }
 });

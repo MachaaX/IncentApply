@@ -14,7 +14,6 @@ interface AuthContextValue {
   user: User | null;
   loading: boolean;
   signInWithGoogle: (email?: string) => Promise<void>;
-  signInWithMicrosoft: (email?: string) => Promise<void>;
   signInWithPassword: (email: string, password: string) => Promise<void>;
   registerWithEmail: (input: {
     firstName: string;
@@ -54,21 +53,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(true);
       try {
         const nextSession = await authService.loginWithGoogle(email);
-        const nextUser = await authService.getCurrentUser();
-        setSession(nextSession);
-        setUser(nextUser);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [authService]
-  );
-
-  const signInWithMicrosoft = useCallback(
-    async (email?: string) => {
-      setLoading(true);
-      try {
-        const nextSession = await authService.loginWithMicrosoft(email);
         const nextUser = await authService.getCurrentUser();
         setSession(nextSession);
         setUser(nextUser);
@@ -131,7 +115,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user,
       loading,
       signInWithGoogle,
-      signInWithMicrosoft,
       signInWithPassword,
       registerWithEmail,
       signOut
@@ -141,7 +124,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       registerWithEmail,
       session,
       signInWithGoogle,
-      signInWithMicrosoft,
       signInWithPassword,
       signOut,
       user
