@@ -59,6 +59,14 @@ if (!JWT_SECRET) {
   throw new Error("Missing JWT_SECRET in environment.");
 }
 
+class HttpError extends Error {
+  constructor(statusCode, message) {
+    super(message);
+    this.name = "HttpError";
+    this.statusCode = statusCode;
+  }
+}
+
 function createInMemoryPool() {
   const db = newDb();
   const { Pool: InMemoryPool } = db.adapters.createPg();
@@ -476,59 +484,35 @@ async function attachPasswordToExistingUser(user, password) {
   return result.rows[0] ?? null;
 }
 
-async function upsertGoogleUser(payload) {
+async function upsertGoogleUser(payload, options = {}) {
   if (!payload.email || !payload.sub) {
     throw new Error("Google payload missing required fields.");
   }
 
+  const intent = options.intent === "signup" ? "signup" : "login";
   const email = normalizeEmail(payload.email);
   const googleSub = payload.sub;
 
   const byGoogleSub = await getUserByGoogleSub(googleSub);
   if (byGoogleSub) {
-    if (poolMode === "mysql") {
-      await pool.query(
-        `
-          UPDATE users
-          SET first_name = COALESCE($2, first_name),
-              last_name = COALESCE($3, last_name),
-              avatar_url = COALESCE($4, avatar_url),
-              updated_at = NOW()
-          WHERE id = $1
-        `,
-        [
-          byGoogleSub.id,
-          payload.given_name ?? null,
-          payload.family_name ?? null,
-          payload.picture ?? null
-        ]
+    if (intent === "signup") {
+      throw new HttpError(
+        409,
+        "An account already exists with this Google email. Please log in instead."
       );
-      return requireUserById(byGoogleSub.id);
     }
-
-    const updated = await pool.query(
-      `
-        UPDATE users
-        SET first_name = COALESCE($2, first_name),
-            last_name = COALESCE($3, last_name),
-            avatar_url = COALESCE($4, avatar_url),
-            updated_at = NOW()
-        WHERE id = $1
-        RETURNING *
-      `,
-      [
-        byGoogleSub.id,
-        payload.given_name ?? null,
-        payload.family_name ?? null,
-        payload.picture ?? null
-      ]
-    );
-
-    return updated.rows[0] ?? null;
+    return byGoogleSub;
   }
 
   const byEmail = await getUserByEmail(email);
   if (byEmail) {
+    if (intent === "signup") {
+      throw new HttpError(
+        409,
+        "An account already exists with this email. Please log in instead."
+      );
+    }
+
     const nextProvider = byEmail.password_hash || byEmail.entra_sub ? "hybrid" : "google";
 
     if (poolMode === "mysql") {
@@ -537,20 +521,10 @@ async function upsertGoogleUser(payload) {
           UPDATE users
           SET google_sub = $2,
               auth_provider = $3,
-              first_name = COALESCE($4, first_name),
-              last_name = COALESCE($5, last_name),
-              avatar_url = COALESCE($6, avatar_url),
               updated_at = NOW()
           WHERE id = $1
         `,
-        [
-          byEmail.id,
-          googleSub,
-          nextProvider,
-          payload.given_name ?? null,
-          payload.family_name ?? null,
-          payload.picture ?? null
-        ]
+        [byEmail.id, googleSub, nextProvider]
       );
       return requireUserById(byEmail.id);
     }
@@ -560,21 +534,11 @@ async function upsertGoogleUser(payload) {
         UPDATE users
         SET google_sub = $2,
             auth_provider = $3,
-            first_name = COALESCE($4, first_name),
-            last_name = COALESCE($5, last_name),
-            avatar_url = COALESCE($6, avatar_url),
             updated_at = NOW()
         WHERE id = $1
         RETURNING *
       `,
-      [
-        byEmail.id,
-        googleSub,
-        nextProvider,
-        payload.given_name ?? null,
-        payload.family_name ?? null,
-        payload.picture ?? null
-      ]
+      [byEmail.id, googleSub, nextProvider]
     );
 
     return updated.rows[0] ?? null;
@@ -623,7 +587,7 @@ async function upsertGoogleUser(payload) {
   return created.rows[0] ?? null;
 }
 
-async function exchangeGoogleCode(code) {
+async function exchangeGoogleCode(code, options = {}) {
   if (!oauthClient || !GOOGLE_CLIENT_ID) {
     throw new Error(getGoogleOAuthNotConfiguredMessage());
   }
@@ -645,7 +609,7 @@ async function exchangeGoogleCode(code) {
     throw new Error("Unable to validate Google identity payload.");
   }
 
-  return upsertGoogleUser(payload);
+  return upsertGoogleUser(payload, options);
 }
 
 function pickEntraEmail(payload) {
@@ -891,7 +855,7 @@ async function exchangeEntraCode(code) {
   return upsertEntraUser(payload);
 }
 
-function createGoogleAuthUrl(redirectPath = "/dashboard", mode = "redirect") {
+function createGoogleAuthUrl(redirectPath = "/dashboard", mode = "redirect", intent = "login") {
   if (!oauthClient) {
     throw new Error(getGoogleOAuthNotConfiguredMessage());
   }
@@ -901,8 +865,13 @@ function createGoogleAuthUrl(redirectPath = "/dashboard", mode = "redirect") {
       ? redirectPath
       : "/dashboard";
   const normalizedMode = mode === "popup" ? "popup" : "redirect";
+  const normalizedIntent = intent === "signup" ? "signup" : "login";
   const state = Buffer.from(
-    JSON.stringify({ redirectPath: normalizedRedirectPath, mode: normalizedMode }),
+    JSON.stringify({
+      redirectPath: normalizedRedirectPath,
+      mode: normalizedMode,
+      intent: normalizedIntent
+    }),
     "utf-8"
   ).toString("base64url");
 
@@ -949,9 +918,10 @@ async function createEntraAuthUrl(redirectPath = "/dashboard", mode = "redirect"
 function parseOAuthState(stateEncoded) {
   let redirectPath = "/dashboard";
   let mode = "redirect";
+  let intent = "login";
 
   if (!stateEncoded) {
-    return { redirectPath, mode };
+    return { redirectPath, mode, intent };
   }
 
   try {
@@ -964,11 +934,15 @@ function parseOAuthState(stateEncoded) {
     if (parsed.mode === "popup") {
       mode = "popup";
     }
+
+    if (parsed.intent === "signup") {
+      intent = "signup";
+    }
   } catch {
     // Ignore invalid state payloads and fall back to defaults.
   }
 
-  return { redirectPath, mode };
+  return { redirectPath, mode, intent };
 }
 
 function isLocalFrontendUrl(value) {
@@ -1029,11 +1003,13 @@ function renderPopupBridge(res, payload, fallbackUrl) {
         if (window.opener && !window.opener.closed) {
           window.opener.postMessage(payload, targetOrigin);
         }
+        window.setTimeout(function () {
+          window.close();
+        }, 150);
 
-        window.close();
         window.setTimeout(function () {
           window.location.replace(fallbackUrl);
-        }, 75);
+        }, 450);
       })();
     </script>
   </body>
@@ -1124,10 +1100,12 @@ app.get("/api/auth/google/start", async (req, res) => {
     const redirectPath =
       typeof req.query.redirect === "string" ? req.query.redirect : "/dashboard";
     const mode = req.query.mode === "popup" ? "popup" : "redirect";
-    const url = createGoogleAuthUrl(redirectPath, mode);
+    const intent = req.query.intent === "signup" ? "signup" : "login";
+    const url = createGoogleAuthUrl(redirectPath, mode, intent);
     return res.redirect(302, url);
   } catch (error) {
-    return res.status(500).json({
+    const statusCode = error instanceof HttpError ? error.statusCode : 500;
+    return res.status(statusCode).json({
       error: error instanceof Error ? error.message : "Failed to start Google OAuth."
     });
   }
@@ -1138,25 +1116,33 @@ app.get("/api/auth/google/url", async (req, res) => {
     const redirectPath =
       typeof req.query.redirect === "string" ? req.query.redirect : "/dashboard";
     const mode = req.query.mode === "popup" ? "popup" : "redirect";
-    const url = createGoogleAuthUrl(redirectPath, mode);
+    const intent = req.query.intent === "signup" ? "signup" : "login";
+    const url = createGoogleAuthUrl(redirectPath, mode, intent);
 
     return res.status(200).json({ url });
   } catch (error) {
-    return res.status(500).json({ error: error instanceof Error ? error.message : "Failed to create OAuth URL." });
+    const statusCode = error instanceof HttpError ? error.statusCode : 500;
+    return res
+      .status(statusCode)
+      .json({ error: error instanceof Error ? error.message : "Failed to create OAuth URL." });
   }
 });
 
 app.post("/api/auth/google/exchange", async (req, res) => {
   try {
-    const { code } = req.body ?? {};
+    const { code, intent } = req.body ?? {};
     if (!code) {
       return res.status(400).json({ error: "Google authorization code is required." });
     }
 
-    const user = await exchangeGoogleCode(String(code));
+    const normalizedIntent = intent === "signup" ? "signup" : "login";
+    const user = await exchangeGoogleCode(String(code), { intent: normalizedIntent });
     return res.status(200).json(buildAuthResponse(user));
   } catch (error) {
-    return res.status(500).json({ error: error instanceof Error ? error.message : "Google OAuth exchange failed." });
+    const statusCode = error instanceof HttpError ? error.statusCode : 500;
+    return res
+      .status(statusCode)
+      .json({ error: error instanceof Error ? error.message : "Google OAuth exchange failed." });
   }
 });
 
@@ -1192,7 +1178,7 @@ app.get("/api/auth/google/callback", async (req, res) => {
       throw new Error("Missing Google OAuth code.");
     }
 
-    const user = await exchangeGoogleCode(code);
+    const user = await exchangeGoogleCode(code, { intent: oauthState.intent });
     const auth = buildAuthResponse(user);
 
     // For SPA convenience in development this redirects with token.
@@ -1215,8 +1201,9 @@ app.get("/api/auth/google/callback", async (req, res) => {
 
     return res.redirect(302, redirectUrl.toString());
   } catch (error) {
+    const fallbackPath = oauthState.intent === "signup" ? "/auth/register" : "/auth/login";
     if (oauthState.mode === "popup") {
-      const fallbackUrl = new URL("/auth/login", frontendBaseUrl);
+      const fallbackUrl = new URL(fallbackPath, frontendBaseUrl);
       fallbackUrl.searchParams.set("oauthError", "1");
       fallbackUrl.searchParams.set(
         "message",
@@ -1234,7 +1221,7 @@ app.get("/api/auth/google/callback", async (req, res) => {
       );
     }
 
-    const fallbackUrl = new URL("/auth/login", frontendBaseUrl);
+    const fallbackUrl = new URL(fallbackPath, frontendBaseUrl);
     fallbackUrl.searchParams.set("oauthError", "1");
     fallbackUrl.searchParams.set(
       "message",

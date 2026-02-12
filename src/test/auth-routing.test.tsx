@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { AuthProvider } from "../app/AuthContext";
 import { AppRouter } from "../app/router";
@@ -36,6 +37,9 @@ describe("auth routing", () => {
 
   it("supports password sign in flow", async () => {
     renderApp("/auth/login");
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText(/email/i), "alex@incentapply.dev");
+    await user.type(screen.getByLabelText(/password/i), "password123");
     fireEvent.click(await screen.findByRole("button", { name: /log in/i }));
     expect(await screen.findByText(/Group Dashboard/i)).toBeInTheDocument();
   });

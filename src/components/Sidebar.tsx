@@ -13,7 +13,7 @@ export function Sidebar() {
   const { user, signOut } = useAuth();
 
   return (
-    <aside className="hidden h-screen w-64 flex-shrink-0 flex-col justify-between border-r border-primary/10 bg-background-dark lg:flex">
+    <aside className="hidden h-screen w-64 flex-shrink-0 flex-col justify-between border-r border-primary/10 bg-background-dark lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 lg:flex">
       <div>
         <div className="flex h-20 items-center gap-3 border-b border-primary/10 px-6">
           <div className="flex h-8 w-8 items-center justify-center rounded bg-primary text-background-dark">

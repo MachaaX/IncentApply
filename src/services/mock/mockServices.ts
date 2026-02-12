@@ -29,9 +29,6 @@ import { maskRouting } from "../../utils/format";
 const simulatedLatencyMs = 120;
 const backendTokenStorageKey = "incentapply_backend_token";
 const oauthPendingStorageKey = "incentapply_oauth_pending";
-const oauthMessageType = "incentapply:oauth";
-const oauthPopupName = "incentapply-oauth-popup";
-const oauthPopupTimeoutMs = 120_000;
 
 type AuthStrategy = "mock" | "hybrid" | "backend";
 
@@ -47,13 +44,6 @@ interface BackendUserProfile {
 interface BackendAuthResponse {
   token: string;
   user: BackendUserProfile;
-}
-
-interface OAuthPopupMessage {
-  type: string;
-  status: "success" | "error";
-  auth?: BackendAuthResponse;
-  error?: string;
 }
 
 class BackendUnavailableError extends Error {}
@@ -315,124 +305,10 @@ function consumeTokenFromUrlIfPresent(): string | null {
 }
 
 type OAuthProvider = "google";
+type OAuthIntent = "login" | "signup";
 
 function displayNameForProvider(provider: OAuthProvider): string {
   return provider === "google" ? "Google" : "OAuth";
-}
-
-function buildOAuthStartUrl(
-  provider: OAuthProvider,
-  redirectPath: string,
-  mode: "redirect" | "popup"
-): string {
-  const query = new URLSearchParams({
-    redirect: redirectPath,
-    mode
-  });
-  return buildBackendUrl(`/api/auth/${provider}/start?${query.toString()}`);
-}
-
-function openOAuthPopup(url: string): Window | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  const width = 520;
-  const height = 680;
-  const left = Math.max(0, window.screenX + (window.outerWidth - width) / 2);
-  const top = Math.max(0, window.screenY + (window.outerHeight - height) / 2);
-
-  return window.open(
-    url,
-    oauthPopupName,
-    `width=${width},height=${height},left=${Math.round(left)},top=${Math.round(top)},resizable=yes,scrollbars=yes`
-  );
-}
-
-function waitForOAuthPopupResult(
-  popup: Window,
-  provider: OAuthProvider
-): Promise<BackendAuthResponse> {
-  const providerName = displayNameForProvider(provider);
-
-  return new Promise((resolve, reject) => {
-    if (typeof window === "undefined") {
-      reject(new Error(`${providerName} sign-in requires a browser environment.`));
-      return;
-    }
-
-    let settled = false;
-
-    const cleanup = () => {
-      window.removeEventListener("message", onMessage);
-      window.clearInterval(closedCheckId);
-      window.clearTimeout(timeoutId);
-    };
-
-    const settle = (result: { auth?: BackendAuthResponse; error?: Error }) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-
-      if (result.error) {
-        reject(result.error);
-        return;
-      }
-
-      if (!result.auth) {
-        reject(new Error(`${providerName} sign-in returned an empty response.`));
-        return;
-      }
-
-      resolve(result.auth);
-    };
-
-    const onMessage = (event: MessageEvent<OAuthPopupMessage>) => {
-      if (event.source !== popup) {
-        return;
-      }
-
-      const payload = event.data;
-      if (!payload || typeof payload !== "object" || payload.type !== oauthMessageType) {
-        return;
-      }
-
-      if (payload.status === "error") {
-        settle({
-          error: new Error(payload.error ?? `${providerName} sign-in failed.`)
-        });
-        return;
-      }
-
-      const auth = payload.auth;
-      if (!auth?.token || !auth.user?.email) {
-        settle({
-          error: new Error(`${providerName} sign-in returned an invalid auth payload.`)
-        });
-        return;
-      }
-
-      settle({ auth });
-    };
-
-    const closedCheckId = window.setInterval(() => {
-      if (popup.closed) {
-        settle({
-          error: new Error(`${providerName} sign-in was canceled before completion.`)
-        });
-      }
-    }, 250);
-
-    const timeoutId = window.setTimeout(() => {
-      settle({
-        error: new Error(`${providerName} sign-in timed out. Please try again.`)
-      });
-    }, oauthPopupTimeoutMs);
-
-    window.addEventListener("message", onMessage);
-  });
 }
 
 async function backendRequest<T>(path: string, init?: RequestInit): Promise<T> {
@@ -580,11 +456,35 @@ function appendActivity(state: ReturnType<typeof getState>, item: Omit<ActivityI
 
 function localLoginWithGoogle(email?: string): AuthSession {
   const state = getState();
-  const selectedUser =
-    state.users.find((user) => user.email.toLowerCase() === (email ?? "").toLowerCase()) ??
-    state.users[0];
+  const normalizedEmail = (email ?? "").trim().toLowerCase();
+  const selectedUser = normalizedEmail
+    ? state.users.find((user) => user.email.toLowerCase() === normalizedEmail)
+    : state.users[0];
+
+  if (!selectedUser) {
+    if (!normalizedEmail) {
+      throw new Error("Google account email is required.");
+    }
+    const created = ensureLocalUser({ email: normalizedEmail });
+    return createLocalSession(created.id, "google", `google-${Date.now()}`);
+  }
 
   return createLocalSession(selectedUser.id, "google", `google-${Date.now()}`);
+}
+
+function localRegisterWithGoogle(email?: string): AuthSession {
+  const normalizedEmail = (email ?? "").trim().toLowerCase();
+  if (!normalizedEmail) {
+    throw new Error("Google account email is required.");
+  }
+
+  const existing = getState().users.find((user) => user.email.toLowerCase() === normalizedEmail);
+  if (existing) {
+    throw new Error("An account already exists with this email. Please log in instead.");
+  }
+
+  const created = ensureLocalUser({ email: normalizedEmail });
+  return createLocalSession(created.id, "google", `google-${Date.now()}`);
 }
 
 function localLoginWithPassword(email: string, password: string): AuthSession {
@@ -674,6 +574,7 @@ function localRegisterWithEmail(input: {
 
 async function loginWithBackendOAuthProvider(
   provider: OAuthProvider,
+  intent: OAuthIntent,
   fallback: () => AuthSession
 ): Promise<AuthSession> {
   if (!backendAuthEnabled()) {
@@ -682,15 +583,22 @@ async function loginWithBackendOAuthProvider(
 
   try {
     setOauthPending();
-    const popup = openOAuthPopup(buildOAuthStartUrl(provider, "/dashboard", "popup"));
+    const query = new URLSearchParams({
+      redirect: "/dashboard",
+      mode: "redirect",
+      intent
+    });
+    const payload = await backendRequest<{ url: string }>(
+      `/api/auth/${provider}/url?${query.toString()}`,
+      { method: "GET" }
+    );
 
-    if (!popup) {
-      window.location.assign(buildOAuthStartUrl(provider, "/dashboard", "redirect"));
-      return new Promise<AuthSession>(() => {});
+    if (!payload?.url) {
+      throw new Error(`${displayNameForProvider(provider)} sign-in URL was not returned.`);
     }
 
-    const auth = await waitForOAuthPopupResult(popup, provider);
-    return withLatency(syncLocalStateFromBackendAuth(auth));
+    window.location.assign(payload.url);
+    return new Promise<AuthSession>(() => {});
   } catch (error) {
     clearOauthPending();
     if (shouldFallbackToMock(error)) {
@@ -744,7 +652,11 @@ const authService: AuthService = {
   },
 
   async loginWithGoogle(email) {
-    return loginWithBackendOAuthProvider("google", () => localLoginWithGoogle(email));
+    return loginWithBackendOAuthProvider("google", "login", () => localLoginWithGoogle(email));
+  },
+
+  async registerWithGoogle(email) {
+    return loginWithBackendOAuthProvider("google", "signup", () => localRegisterWithGoogle(email));
   },
 
   async loginWithPassword(email, password) {

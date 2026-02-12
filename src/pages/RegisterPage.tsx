@@ -1,17 +1,27 @@
-import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../app/AuthContext";
 import { AuthButtons } from "../components/ui/AuthButtons";
 import { FormField } from "../components/ui/FormField";
 
 export function RegisterPage() {
-  const { registerWithEmail, signInWithGoogle, loading } = useAuth();
+  const { registerWithEmail, signUpWithGoogle, loading } = useAuth();
   const navigate = useNavigate();
-  const [firstName, setFirstName] = useState("Jane");
-  const [lastName, setLastName] = useState("Doe");
-  const [email, setEmail] = useState("jane@incentapply.dev");
-  const [password, setPassword] = useState("password123");
+  const location = useLocation();
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get("oauthError") !== "1") {
+      return;
+    }
+    const message = params.get("message");
+    setError(message ?? "Unable to continue with Google.");
+  }, [location.search]);
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -27,7 +37,7 @@ export function RegisterPage() {
   const google = async () => {
     setError(null);
     try {
-      await signInWithGoogle(email);
+      await signUpWithGoogle(email);
       navigate("/dashboard", { replace: true });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to continue with Google.");
@@ -39,16 +49,39 @@ export function RegisterPage() {
       <form onSubmit={submit} className="w-full max-w-lg space-y-5 rounded-2xl border border-primary/15 bg-surface-dark p-7">
         <h1 className="text-2xl font-bold">Create Account</h1>
         <div className="grid gap-4 sm:grid-cols-2">
-          <FormField id="reg-first-name" label="First Name" value={firstName} onChange={setFirstName} required />
-          <FormField id="reg-last-name" label="Last Name" value={lastName} onChange={setLastName} required />
+          <FormField
+            id="reg-first-name"
+            label="First Name"
+            value={firstName}
+            onChange={setFirstName}
+            placeholder="Jane"
+            required
+          />
+          <FormField
+            id="reg-last-name"
+            label="Last Name"
+            value={lastName}
+            onChange={setLastName}
+            placeholder="Doe"
+            required
+          />
         </div>
-        <FormField id="reg-email" label="Email" value={email} onChange={setEmail} type="email" required />
+        <FormField
+          id="reg-email"
+          label="Email"
+          value={email}
+          onChange={setEmail}
+          type="email"
+          placeholder="you@example.com"
+          required
+        />
         <FormField
           id="reg-password"
           label="Password"
           value={password}
           onChange={setPassword}
           type="password"
+          placeholder="Create a password"
           helperText="At least 8 characters"
           required
         />

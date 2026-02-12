@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../app/AuthContext";
 import { AuthButtons } from "../components/ui/AuthButtons";
@@ -8,11 +8,20 @@ export function LoginPage() {
   const { signInWithGoogle, signInWithPassword, loading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const [email, setEmail] = useState("alex@incentapply.dev");
-  const [password, setPassword] = useState("password123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const from = (location.state as { from?: string } | null)?.from ?? "/dashboard";
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get("oauthError") !== "1") {
+      return;
+    }
+    const message = params.get("message");
+    setError(message ?? "Unable to sign in with Google.");
+  }, [location.search]);
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -39,13 +48,22 @@ export function LoginPage() {
     <main className="flex min-h-screen items-center justify-center bg-background-dark px-4 text-white">
       <form onSubmit={submit} className="w-full max-w-md space-y-5 rounded-2xl border border-primary/15 bg-surface-dark p-7">
         <h1 className="text-2xl font-bold">Log In</h1>
-        <FormField id="login-email" label="Email" value={email} onChange={setEmail} type="email" required />
+        <FormField
+          id="login-email"
+          label="Email"
+          value={email}
+          onChange={setEmail}
+          type="email"
+          placeholder="you@example.com"
+          required
+        />
         <FormField
           id="login-password"
           label="Password"
           value={password}
           onChange={setPassword}
           type="password"
+          placeholder="Enter your password"
           required
         />
         {error ? <p className="text-sm text-red-300">{error}</p> : null}

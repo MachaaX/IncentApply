@@ -34,7 +34,7 @@ export function FormField({
         placeholder={placeholder}
         required={required}
         readOnly={readOnly}
-        className="w-full rounded-lg border border-border-dark bg-background-dark px-4 py-3 text-sm text-white placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary read-only:cursor-not-allowed read-only:opacity-70"
+        className="w-full rounded-lg border border-border-dark bg-background-dark px-4 py-3 text-sm text-white placeholder:text-slate-500/70 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary focus:placeholder-transparent read-only:cursor-not-allowed read-only:opacity-70"
       />
       {helperText ? <span className="mt-1 block text-xs text-slate-500">{helperText}</span> : null}
     </label>

@@ -57,4 +57,19 @@ describe("mock services", () => {
     const logs = await services.applicationService.getLogsForWeek(week.weekId);
     expect(logs.some((log) => log.id === created.id)).toBe(false);
   });
+
+  it("creates a new account when a first-time user logs in with Google", async () => {
+    const uniqueEmail = `first.timer.${Date.now()}@incentapply.dev`;
+    const session = await services.authService.loginWithGoogle(uniqueEmail);
+    expect(session.provider).toBe("google");
+
+    const user = await services.authService.getCurrentUser();
+    expect(user?.email).toBe(uniqueEmail);
+  });
+
+  it("rejects duplicate Google signup attempts", async () => {
+    await expect(
+      services.authService.registerWithGoogle("alex@incentapply.dev")
+    ).rejects.toThrow(/already exists/i);
+  });
 });
