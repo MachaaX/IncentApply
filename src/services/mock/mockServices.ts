@@ -59,8 +59,11 @@ interface OAuthPopupMessage {
 class BackendUnavailableError extends Error {}
 
 const configuredStrategy = (import.meta.env.VITE_AUTH_STRATEGY as string | undefined)?.toLowerCase();
+const isVitestRuntime =
+  (typeof process !== "undefined" && process.env?.VITEST === "true") ||
+  import.meta.env.MODE === "test";
 const authStrategy: AuthStrategy =
-  import.meta.env.MODE === "test"
+  isVitestRuntime
     ? "mock"
     : configuredStrategy === "mock" ||
         configuredStrategy === "hybrid" ||

@@ -14,8 +14,8 @@
     "backend:dev": "node backend/server.js",
     "backend:dev:watch": "node --watch backend/server.js",
     "backend:start": "node backend/server.js",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "NODE_ENV=test vitest run",
+    "test:watch": "NODE_ENV=test vitest"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.0.2",
