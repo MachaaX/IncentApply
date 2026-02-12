@@ -25,6 +25,25 @@ function isValidEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
+function isStrongPassword(value: string): boolean {
+  const hasUppercase = /[A-Z]/.test(value);
+  const hasLowercase = /[a-z]/.test(value);
+  const hasNumber = /\d/.test(value);
+  const hasSymbol = /[^A-Za-z0-9\s]/.test(value);
+  return value.length >= 8 && hasUppercase && hasLowercase && hasNumber && hasSymbol;
+}
+
+function isInvalidCredentialMessage(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return (
+    normalized.includes("invalid credentials") ||
+    normalized.includes("no account found") ||
+    normalized.includes("incorrect password") ||
+    normalized.includes("wrong email or password") ||
+    normalized.includes("status 401")
+  );
+}
+
 export function WelcomePage() {
   const {
     loading,
@@ -100,6 +119,13 @@ export function WelcomePage() {
       return;
     }
 
+    if (!isStrongPassword(password)) {
+      showValidationMessage(
+        "Use a stronger password with 8+ characters, uppercase, lowercase, a number, and a symbol."
+      );
+      return;
+    }
+
     if (!termsAccepted) {
       showValidationMessage("Please accept Terms and Privacy Policy.");
       return;
@@ -133,7 +159,12 @@ export function WelcomePage() {
       await signInWithPassword(email, password);
       navigate(from, { replace: true });
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to sign in.");
+      const message = reason instanceof Error ? reason.message : "Unable to sign in.";
+      if (isInvalidCredentialMessage(message)) {
+        showValidationMessage("Wrong Email or password");
+        return;
+      }
+      setError(message);
     }
   };
 
@@ -510,7 +541,28 @@ export function WelcomePage() {
                             </span>
                           </button>
                         </div>
-                        <p className="ml-1 mt-1 text-[10px] text-gray-500">Must be at least 8 characters.</p>
+                        <div className="ml-1 mt-1 flex items-center gap-2 text-[10px] text-gray-500">
+                          <p>Must be at least 8 characters.</p>
+                          <div className="group relative inline-flex">
+                            <span
+                              tabIndex={0}
+                              aria-label="Password requirements information"
+                              className="inline-flex h-4 w-4 cursor-default items-center justify-center rounded-full border border-gray-600 text-[10px] text-gray-300 transition-colors group-hover:border-primary group-hover:text-primary focus:border-primary focus:text-primary focus:outline-none"
+                            >
+                              <span className="material-icons-outlined text-[10px] leading-none">info</span>
+                            </span>
+                            <div className="pointer-events-none absolute left-0 top-full z-20 mt-2 w-72 translate-y-1 scale-[0.98] rounded-lg border border-primary/30 bg-surface-dark/95 p-3 text-xs text-gray-200 opacity-0 shadow-xl shadow-black/40 backdrop-blur transition-all duration-150 group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:scale-100 group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:translate-y-0 group-focus-within:scale-100 group-focus-within:opacity-100">
+                              <p className="mb-2 font-semibold text-white">Strong password requirements</p>
+                              <ul className="space-y-1 text-gray-300">
+                                <li>At least 8 characters</li>
+                                <li>At least one uppercase letter (A-Z)</li>
+                                <li>At least one lowercase letter (a-z)</li>
+                                <li>At least one number (0-9)</li>
+                                <li>At least one symbol (e.g. ! @ # $ %)</li>
+                              </ul>
+                            </div>
+                          </div>
+                        </div>
                       </div>
 
                       <div className="mt-4 flex items-start">
