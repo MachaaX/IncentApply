@@ -584,7 +584,7 @@ async function loginWithBackendOAuthProvider(
   try {
     setOauthPending();
     const query = new URLSearchParams({
-      redirect: "/dashboard",
+      redirect: "/my-groups",
       mode: "redirect",
       intent
     });

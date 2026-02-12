@@ -1,35 +1,248 @@
-import { useMemo } from "react";
-import { useLocation } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useAuth } from "../app/AuthContext";
+import { mockMyGroups } from "../mocks/data/mockMyGroups";
 
 const routeTitle: Record<string, string> = {
-  "/dashboard": "Group Dashboard",
+  "/my-groups": "My Groups",
   "/group/setup": "Group Setup",
   "/wallet": "My Wallet",
-  "/members": "Members",
+  "/applications": "Applications",
   "/settlements": "Settlements",
   "/settings": "Settings"
 };
 
+const mockNotifications = [
+  { id: "notif-1", message: "Welcome to IncentApply - 02/26" },
+  { id: "notif-2", message: "You are behind the goal this week" },
+  { id: "notif-3", message: "You have a group invite in My Groups" }
+];
+const pendingInviteCount = 4;
+const selectedMockGroupStorageKey = "incentapply_selected_mock_group_id";
+
+function getUserInitials(firstName?: string, lastName?: string): string {
+  const first = firstName?.trim().charAt(0) ?? "";
+  const last = lastName?.trim().charAt(0) ?? "";
+  const initials = `${first}${last}`.toUpperCase();
+  return initials || "U";
+}
+
 export function TopNav() {
+  const { user } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [groupMenuOpen, setGroupMenuOpen] = useState(false);
+  const groupMenuRef = useRef<HTMLDivElement | null>(null);
+  const isMyGroupsRoute = location.pathname.startsWith("/my-groups");
+  const currentGroupId = isMyGroupsRoute ? location.pathname.split("/")[2] : undefined;
 
   const title = useMemo(() => {
+    if (isMyGroupsRoute) {
+      return "My Groups";
+    }
     return routeTitle[location.pathname] ?? "IncentApply";
+  }, [isMyGroupsRoute, location.pathname]);
+
+  const avatarUrl = user?.avatarUrl?.trim();
+  const initials = getUserInitials(user?.firstName, user?.lastName);
+  const groupLinks = mockMyGroups;
+  const routeGroupId = groupLinks.some((group) => group.id === currentGroupId)
+    ? currentGroupId
+    : undefined;
+  const storedGroupId =
+    typeof window !== "undefined"
+      ? window.localStorage.getItem(selectedMockGroupStorageKey) ?? undefined
+      : undefined;
+  const activeGroupId =
+    routeGroupId ??
+    (groupLinks.some((group) => group.id === storedGroupId) ? storedGroupId : undefined) ??
+    groupLinks[0]?.id;
+  const activeGroup = groupLinks.find((group) => group.id === activeGroupId);
+
+  useEffect(() => {
+    setNotificationsOpen(false);
+    setGroupMenuOpen(false);
   }, [location.pathname]);
 
+  useEffect(() => {
+    if (!routeGroupId || typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(selectedMockGroupStorageKey, routeGroupId);
+  }, [routeGroupId]);
+
+  useEffect(() => {
+    const onMouseDown = (event: MouseEvent) => {
+      if (!groupMenuRef.current) {
+        return;
+      }
+      if (!groupMenuRef.current.contains(event.target as Node)) {
+        setGroupMenuOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onMouseDown);
+    return () => window.removeEventListener("mousedown", onMouseDown);
+  }, []);
+
+  const groupsButtonClass = `inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-bold transition-all ${
+    groupMenuOpen
+      ? "border-primary bg-primary/20 text-white shadow-[0_0_0_1px_rgba(17,212,147,0.35),0_8px_18px_rgba(17,212,147,0.2)]"
+      : "border-primary/45 bg-[#18372d] text-primary hover:border-primary hover:bg-primary/15 hover:text-white"
+  }`;
+  const subPageButtonClass = (active: boolean) =>
+    `inline-flex h-10 items-center gap-1.5 rounded-lg px-3 text-sm font-semibold transition-colors ${
+      active
+        ? "border border-primary bg-primary/15 text-primary"
+        : "border border-primary/20 bg-surface-dark text-slate-200 hover:border-primary/40 hover:text-white"
+    }`;
+
   return (
-    <header className="sticky top-0 z-10 flex h-20 items-center justify-between border-b border-primary/10 bg-background-dark/85 px-6 backdrop-blur-md">
-      <div>
-        <h1 className="text-xl font-bold text-white">{title}</h1>
-        <p className="text-xs text-slate-400">Friday to Friday challenge cycle</p>
-      </div>
-      <button
-        type="button"
-        className="rounded-lg bg-primary px-4 py-2 text-sm font-bold text-background-dark shadow-glow transition-colors hover:bg-primary-dark"
-      >
-        <span className="material-icons mr-2 align-middle text-base">add_circle</span>
-        Log Application
-      </button>
-    </header>
+    <>
+      <header className="sticky top-0 z-10 flex h-20 items-center justify-between border-b border-primary/10 bg-background-dark/85 px-6 backdrop-blur-md">
+        {isMyGroupsRoute ? (
+          <div className="flex min-w-0 items-center gap-2 overflow-x-auto pr-2">
+            <div ref={groupMenuRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setGroupMenuOpen((open) => !open)}
+                className={groupsButtonClass}
+                aria-label="Open my groups list"
+                aria-expanded={groupMenuOpen}
+              >
+                <span>{activeGroup ? activeGroup.name : "My Groups"}</span>
+                <span
+                  className={`material-icons text-base transition-transform ${
+                    groupMenuOpen ? "rotate-180" : ""
+                  }`}
+                >
+                  expand_more
+                </span>
+              </button>
+
+              {groupMenuOpen ? (
+                <div className="absolute left-0 top-12 z-40 w-64 overflow-hidden rounded-xl border border-primary/20 bg-surface-dark shadow-2xl">
+                  <p className="border-b border-primary/10 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Your Groups
+                  </p>
+                  {groupLinks.length ? (
+                    <ul className="py-1">
+                      {groupLinks.map((group) => (
+                        <li key={group.id}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setGroupMenuOpen(false);
+                              if (typeof window !== "undefined") {
+                                window.localStorage.setItem(selectedMockGroupStorageKey, group.id);
+                              }
+                              navigate(`/my-groups/${group.id}`);
+                            }}
+                            className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors ${
+                              group.id === activeGroupId
+                                ? "bg-primary/15 text-primary"
+                                : "text-slate-200 hover:bg-primary/10 hover:text-white"
+                            }`}
+                          >
+                            <span>{group.name}</span>
+                            <span className="text-xs text-slate-500">{group.id}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="px-3 py-3 text-sm text-slate-400">No groups available.</p>
+                  )}
+                </div>
+              ) : null}
+            </div>
+
+            <Link
+              to="/my-groups/create"
+              className={subPageButtonClass(location.pathname === "/my-groups/create")}
+            >
+              <span className="material-icons text-base">add</span>
+              <span className="whitespace-nowrap">Create Group</span>
+            </Link>
+
+            <Link
+              to="/my-groups/join"
+              className={subPageButtonClass(location.pathname === "/my-groups/join")}
+            >
+              <span className="whitespace-nowrap">Join Group</span>
+              <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-primary text-[11px] font-bold text-background-dark">
+                {pendingInviteCount}
+              </span>
+            </Link>
+          </div>
+        ) : (
+          <div>
+            <h1 className="text-xl font-bold text-white">{title}</h1>
+            <p className="text-xs text-slate-400">Friday to Friday challenge cycle</p>
+          </div>
+        )}
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setNotificationsOpen((open) => !open)}
+            className="relative inline-flex items-center justify-center text-slate-300 transition-colors hover:text-primary"
+            aria-label="Open notifications"
+            aria-expanded={notificationsOpen}
+          >
+            <span className="material-icons text-[26px]">notifications</span>
+            {mockNotifications.length ? (
+              <span className="absolute right-0 top-0 h-2.5 w-2.5 rounded-full bg-secondary-gold" />
+            ) : null}
+          </button>
+
+          <Link
+            to="/settings"
+            className="inline-flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border border-primary/30 bg-primary/10 text-sm font-bold text-white transition-colors hover:border-primary"
+            aria-label="Open profile settings"
+          >
+            {avatarUrl ? (
+              <img
+                src={avatarUrl}
+                alt={`${user?.firstName ?? "User"} ${user?.lastName ?? ""}`.trim()}
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <span>{initials}</span>
+            )}
+          </Link>
+        </div>
+      </header>
+
+      {notificationsOpen ? (
+        <>
+          <button
+            type="button"
+            aria-label="Close notifications panel"
+            onClick={() => setNotificationsOpen(false)}
+            className="fixed inset-0 z-20 bg-black/25"
+          />
+          <aside className="fixed right-4 top-24 z-30 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-primary/20 bg-surface-dark p-4 shadow-2xl">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-bold uppercase tracking-wide text-white">Notifications</h2>
+              <button
+                type="button"
+                onClick={() => setNotificationsOpen(false)}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-primary/20 text-slate-300 hover:text-white"
+                aria-label="Close notifications"
+              >
+                <span className="material-icons text-base">close</span>
+              </button>
+            </div>
+            <ul className="space-y-2">
+              {mockNotifications.map((item) => (
+                <li key={item.id} className="rounded-lg border border-primary/10 bg-background-dark px-3 py-2">
+                  <p className="text-sm text-slate-100">{item.message}</p>
+                </li>
+              ))}
+            </ul>
+          </aside>
+        </>
+      ) : null}
+    </>
   );
 }

@@ -2,9 +2,12 @@ import { useMemo } from "react";
 import { Navigate, Outlet, RouterProvider, createBrowserRouter, useLocation } from "react-router-dom";
 import { useAuth } from "./AuthContext";
 import { AppShell } from "../components/AppShell";
-import { DashboardPage } from "../pages/DashboardPage";
 import { GroupSetupPage } from "../pages/GroupSetupPage";
 import { MembersPage } from "../pages/MembersPage";
+import { MyGroupPage } from "../pages/MyGroupPage";
+import { MyGroupsCreatePage } from "../pages/MyGroupsCreatePage";
+import { MyGroupsJoinPage } from "../pages/MyGroupsJoinPage";
+import { mockMyGroups } from "../mocks/data/mockMyGroups";
 import { SettlementsPage } from "../pages/SettlementsPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { WalletPage } from "../pages/WalletPage";
@@ -33,7 +36,7 @@ function PublicOnlyRoute() {
   }
 
   if (session) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to="/my-groups" replace />;
   }
 
   return <Outlet />;
@@ -44,7 +47,16 @@ function RootRedirect() {
   if (loading) {
     return <p className="p-6 text-sm text-slate-400">Loading app...</p>;
   }
-  return <Navigate to={session ? "/dashboard" : "/welcome"} replace />;
+  return <Navigate to={session ? "/my-groups" : "/welcome"} replace />;
+}
+
+function MyGroupsIndexRedirect() {
+  const firstGroup = mockMyGroups[0];
+  if (!firstGroup) {
+    return <p className="p-6 text-sm text-slate-400">No groups available.</p>;
+  }
+
+  return <Navigate to={`/my-groups/${firstGroup.id}`} replace />;
 }
 
 function LegacyAuthRedirect({ mode }: { mode: "signup" | "login" }) {
@@ -92,8 +104,20 @@ function createAppRouter() {
           element: <AppShell />,
           children: [
             {
-              path: "/dashboard",
-              element: <DashboardPage />
+              path: "/my-groups",
+              element: <MyGroupsIndexRedirect />
+            },
+            {
+              path: "/my-groups/create",
+              element: <MyGroupsCreatePage />
+            },
+            {
+              path: "/my-groups/join",
+              element: <MyGroupsJoinPage />
+            },
+            {
+              path: "/my-groups/:groupId",
+              element: <MyGroupPage />
             },
             {
               path: "/group/setup",
@@ -108,8 +132,16 @@ function createAppRouter() {
               element: <SettingsPage />
             },
             {
-              path: "/members",
+              path: "/applications",
               element: <MembersPage />
+            },
+            {
+              path: "/dashboard",
+              element: <Navigate to="/my-groups" replace />
+            },
+            {
+              path: "/members",
+              element: <Navigate to="/applications" replace />
             },
             {
               path: "/settlements",

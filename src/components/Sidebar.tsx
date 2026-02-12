@@ -2,9 +2,9 @@ import { NavLink } from "react-router-dom";
 import { useAuth } from "../app/AuthContext";
 
 const links = [
-  { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
+  { to: "/my-groups", label: "My Groups", icon: "groups" },
   { to: "/wallet", label: "Wallet", icon: "account_balance_wallet" },
-  { to: "/members", label: "Members", icon: "groups" },
+  { to: "/applications", label: "Applications", icon: "description" },
   { to: "/settlements", label: "Settlements", icon: "emoji_events" },
   { to: "/settings", label: "Settings", icon: "settings" }
 ];

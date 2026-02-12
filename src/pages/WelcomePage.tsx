@@ -70,7 +70,7 @@ export function WelcomePage() {
   const [validationMessage, setValidationMessage] = useState<string | null>(null);
   const [validationBounce, setValidationBounce] = useState(0);
 
-  const from = (location.state as { from?: string } | null)?.from ?? "/dashboard";
+  const from = (location.state as { from?: string } | null)?.from ?? "/my-groups";
   const isLoginMode = authMode === loginView;
   const passwordType = passwordVisible ? "text" : "password";
 

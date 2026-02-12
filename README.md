@@ -98,10 +98,12 @@ Public routes:
 
 Protected routes:
 - `/group/setup`
-- `/dashboard`
+- `/my-groups/:groupId`
+- `/my-groups/create`
+- `/my-groups/join`
 - `/wallet`
 - `/settings`
-- `/members`
+- `/applications`
 - `/settlements`
 
 ## Domain and Services

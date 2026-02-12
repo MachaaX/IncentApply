@@ -8,13 +8,13 @@ export function MembersPage() {
   const progressQuery = useMemberProgress(weekQuery.data?.weekId);
 
   if (!groupQuery.data || !membersQuery.data || !weekQuery.data || !progressQuery.data) {
-    return <p className="text-sm text-slate-400">Loading members...</p>;
+    return <p className="text-sm text-slate-400">Loading applications...</p>;
   }
 
   return (
     <div className="space-y-6">
       <header>
-        <h2 className="text-3xl font-black text-white">Members</h2>
+        <h2 className="text-3xl font-black text-white">Applications</h2>
         <p className="mt-1 text-slate-400">
           Week {weekQuery.data.weekId} · Shared goal {groupQuery.data.weeklyGoal} applications
         </p>

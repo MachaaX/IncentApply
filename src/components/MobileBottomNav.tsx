@@ -1,7 +1,7 @@
 import { NavLink } from "react-router-dom";
 
 const items = [
-  { to: "/dashboard", icon: "dashboard", label: "Home" },
+  { to: "/my-groups", icon: "groups", label: "My Groups" },
   { to: "/wallet", icon: "account_balance_wallet", label: "Wallet" },
   { to: "/settlements", icon: "emoji_events", label: "Settle" },
   { to: "/settings", icon: "settings", label: "Settings" }

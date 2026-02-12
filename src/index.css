@@ -128,6 +128,81 @@ select {
     0 0 0 4px #10221c;
 }
 
+.group-setup-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  background: transparent;
+}
+
+.group-setup-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: transparent;
+}
+
+.group-setup-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 24px;
+  height: 24px;
+  margin-top: -10px;
+  border: 0;
+  border-radius: 9999px;
+  cursor: pointer;
+  background: #11d493;
+  box-shadow: 0 0 10px rgba(17, 212, 147, 0.5);
+}
+
+.group-setup-range::-moz-range-track {
+  height: 4px;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+}
+
+.group-setup-range::-moz-range-thumb {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 9999px;
+  cursor: pointer;
+  background: #11d493;
+  box-shadow: 0 0 10px rgba(17, 212, 147, 0.5);
+}
+
+.group-setup-range:focus-visible::-webkit-slider-thumb,
+.group-setup-range:active::-webkit-slider-thumb {
+  box-shadow:
+    0 0 0 6px rgba(17, 212, 147, 0.16),
+    0 0 18px rgba(17, 212, 147, 0.6);
+}
+
+.group-setup-range:focus-visible::-moz-range-thumb,
+.group-setup-range:active::-moz-range-thumb {
+  box-shadow:
+    0 0 0 6px rgba(17, 212, 147, 0.16),
+    0 0 18px rgba(17, 212, 147, 0.6);
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(17, 212, 147, 0.05);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(17, 212, 147, 0.2);
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(17, 212, 147, 0.4);
+}
+
 /* Improves table scrolling aesthetics */
 html::-webkit-scrollbar {
   width: 8px;

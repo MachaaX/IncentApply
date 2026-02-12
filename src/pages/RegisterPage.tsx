@@ -28,7 +28,7 @@ export function RegisterPage() {
     setError(null);
     try {
       await registerWithEmail({ firstName, lastName, email, password });
-      navigate("/dashboard", { replace: true });
+      navigate("/my-groups", { replace: true });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to register.");
     }
@@ -38,7 +38,7 @@ export function RegisterPage() {
     setError(null);
     try {
       await signUpWithGoogle(email);
-      navigate("/dashboard", { replace: true });
+      navigate("/my-groups", { replace: true });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to continue with Google.");
     }

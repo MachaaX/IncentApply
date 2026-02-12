@@ -31,7 +31,7 @@ function renderApp(path: string) {
 
 describe("auth routing", () => {
   it("redirects unauthenticated users from protected routes to welcome", async () => {
-    renderApp("/dashboard");
+    renderApp("/my-groups");
     expect(await screen.findByText(/Create your Challenger Profile/i)).toBeInTheDocument();
   });
 
@@ -41,18 +41,18 @@ describe("auth routing", () => {
     await user.type(await screen.findByLabelText(/email/i), "alex@incentapply.dev");
     await user.type(screen.getByLabelText(/password/i, { selector: "input" }), "password123");
     fireEvent.click(await screen.findByRole("button", { name: /log in/i }));
-    expect(await screen.findByText(/Group Dashboard/i)).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Open my groups list/i })).toBeInTheDocument();
   });
 
   it("supports google sign in flow", async () => {
     renderApp("/auth/login");
     fireEvent.click(await screen.findByRole("button", { name: /continue with google/i }));
-    expect(await screen.findByText(/Group Dashboard/i)).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Open my groups list/i })).toBeInTheDocument();
   });
 
   it("clears session on logout", async () => {
     await services.authService.loginWithPassword("alex@incentapply.dev", "password123");
-    renderApp("/dashboard");
+    renderApp("/my-groups");
 
     fireEvent.click(await screen.findByRole("button", { name: /log out/i }));
     expect(await screen.findByText(/Create your Challenger Profile/i)).toBeInTheDocument();
