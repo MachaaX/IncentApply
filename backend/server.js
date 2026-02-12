@@ -170,9 +170,6 @@ function getMissingGoogleOAuthConfigKeys() {
   if (!GOOGLE_CLIENT_SECRET || secretLooksLikeTemplate) {
     missing.push("GOOGLE_CLIENT_SECRET");
   }
-  if (!GOOGLE_REDIRECT_URI) {
-    missing.push("GOOGLE_REDIRECT_URI");
-  }
   return missing;
 }
 
@@ -592,7 +589,13 @@ async function exchangeGoogleCode(code, options = {}) {
     throw new Error(getGoogleOAuthNotConfiguredMessage());
   }
 
-  const tokenResult = await oauthClient.getToken(code);
+  const redirectUri =
+    typeof options.redirectUri === "string" && options.redirectUri.length > 0
+      ? options.redirectUri
+      : GOOGLE_REDIRECT_URI;
+  const tokenResult = await oauthClient.getToken(
+    redirectUri ? { code, redirect_uri: redirectUri } : code
+  );
   oauthClient.setCredentials(tokenResult.tokens);
 
   if (!tokenResult.tokens.id_token) {
@@ -855,7 +858,12 @@ async function exchangeEntraCode(code) {
   return upsertEntraUser(payload);
 }
 
-function createGoogleAuthUrl(redirectPath = "/dashboard", mode = "redirect", intent = "login") {
+function createGoogleAuthUrl(
+  redirectPath = "/dashboard",
+  mode = "redirect",
+  intent = "login",
+  redirectUri = GOOGLE_REDIRECT_URI
+) {
   if (!oauthClient) {
     throw new Error(getGoogleOAuthNotConfiguredMessage());
   }
@@ -879,7 +887,8 @@ function createGoogleAuthUrl(redirectPath = "/dashboard", mode = "redirect", int
     access_type: "offline",
     prompt: "select_account consent",
     scope: ["openid", "email", "profile"],
-    state
+    state,
+    redirect_uri: redirectUri
   });
 }
 
@@ -954,32 +963,75 @@ function isLocalFrontendUrl(value) {
   }
 }
 
-function resolveFrontendBaseUrl(req) {
-  const configuredUrl = FRONTEND_URL;
-  const shouldAutoDetectHost =
-    process.env.NODE_ENV === "production" && isLocalFrontendUrl(configuredUrl);
-
-  if (!shouldAutoDetectHost && configuredUrl) {
-    return configuredUrl;
+function getForwardedHeaderValue(value) {
+  if (Array.isArray(value)) {
+    return value[0] ?? "";
   }
 
-  const forwardedProtoHeader = req.headers["x-forwarded-proto"];
-  const forwardedProto = Array.isArray(forwardedProtoHeader)
-    ? forwardedProtoHeader[0]
-    : forwardedProtoHeader;
-  const protocol = forwardedProto ?? req.protocol ?? "https";
+  if (typeof value === "string") {
+    const [first] = value.split(",");
+    return first?.trim() ?? "";
+  }
 
-  const forwardedHostHeader = req.headers["x-forwarded-host"];
-  const forwardedHost = Array.isArray(forwardedHostHeader)
-    ? forwardedHostHeader[0]
-    : forwardedHostHeader;
-  const host = forwardedHost ?? req.get("host");
+  return "";
+}
+
+function resolveRequestOrigin(req, fallbackOrigin) {
+  const forwardedProto = getForwardedHeaderValue(req.headers["x-forwarded-proto"]);
+  const protocol = forwardedProto || req.protocol || "https";
+
+  const forwardedHost = getForwardedHeaderValue(req.headers["x-forwarded-host"]);
+  const host = forwardedHost || req.get("host");
 
   if (!host) {
-    return configuredUrl;
+    return fallbackOrigin;
   }
 
   return `${protocol}://${host}`;
+}
+
+function resolveFrontendBaseUrl(req) {
+  const configuredUrl = FRONTEND_URL?.trim();
+
+  if (!configuredUrl) {
+    return resolveRequestOrigin(req, "http://localhost:5173");
+  }
+
+  if (!isLocalFrontendUrl(configuredUrl)) {
+    return configuredUrl;
+  }
+
+  const requestOrigin = resolveRequestOrigin(req, configuredUrl);
+  if (isLocalFrontendUrl(requestOrigin)) {
+    return configuredUrl;
+  }
+
+  return requestOrigin;
+}
+
+function resolveGoogleRedirectUri(req) {
+  const configuredRedirectUri = GOOGLE_REDIRECT_URI?.trim();
+
+  if (configuredRedirectUri && !isLocalFrontendUrl(configuredRedirectUri)) {
+    try {
+      const parsed = new URL(configuredRedirectUri);
+      if (parsed.pathname === "/api/auth/google/callback") {
+        return configuredRedirectUri;
+      }
+    } catch {
+      // Fall back to request-derived callback URL below.
+    }
+  }
+
+  if (configuredRedirectUri && isLocalFrontendUrl(configuredRedirectUri)) {
+    const requestOrigin = resolveRequestOrigin(req, configuredRedirectUri);
+    if (isLocalFrontendUrl(requestOrigin)) {
+      return configuredRedirectUri;
+    }
+  }
+
+  const callbackOrigin = resolveRequestOrigin(req, resolveFrontendBaseUrl(req));
+  return new URL("/api/auth/google/callback", callbackOrigin).toString();
 }
 
 function renderPopupBridge(res, payload, fallbackUrl) {
@@ -1101,7 +1153,8 @@ app.get("/api/auth/google/start", async (req, res) => {
       typeof req.query.redirect === "string" ? req.query.redirect : "/dashboard";
     const mode = req.query.mode === "popup" ? "popup" : "redirect";
     const intent = req.query.intent === "signup" ? "signup" : "login";
-    const url = createGoogleAuthUrl(redirectPath, mode, intent);
+    const redirectUri = resolveGoogleRedirectUri(req);
+    const url = createGoogleAuthUrl(redirectPath, mode, intent, redirectUri);
     return res.redirect(302, url);
   } catch (error) {
     const statusCode = error instanceof HttpError ? error.statusCode : 500;
@@ -1117,7 +1170,8 @@ app.get("/api/auth/google/url", async (req, res) => {
       typeof req.query.redirect === "string" ? req.query.redirect : "/dashboard";
     const mode = req.query.mode === "popup" ? "popup" : "redirect";
     const intent = req.query.intent === "signup" ? "signup" : "login";
-    const url = createGoogleAuthUrl(redirectPath, mode, intent);
+    const redirectUri = resolveGoogleRedirectUri(req);
+    const url = createGoogleAuthUrl(redirectPath, mode, intent, redirectUri);
 
     return res.status(200).json({ url });
   } catch (error) {
@@ -1136,7 +1190,11 @@ app.post("/api/auth/google/exchange", async (req, res) => {
     }
 
     const normalizedIntent = intent === "signup" ? "signup" : "login";
-    const user = await exchangeGoogleCode(String(code), { intent: normalizedIntent });
+    const redirectUri = resolveGoogleRedirectUri(req);
+    const user = await exchangeGoogleCode(String(code), {
+      intent: normalizedIntent,
+      redirectUri
+    });
     return res.status(200).json(buildAuthResponse(user));
   } catch (error) {
     const statusCode = error instanceof HttpError ? error.statusCode : 500;
@@ -1166,6 +1224,7 @@ app.get("/api/auth/google/callback", async (req, res) => {
   const stateEncoded = typeof req.query.state === "string" ? req.query.state : "";
   const oauthState = parseOAuthState(stateEncoded);
   const frontendBaseUrl = resolveFrontendBaseUrl(req);
+  const redirectUri = resolveGoogleRedirectUri(req);
 
   try {
     const oauthError = typeof req.query.error === "string" ? req.query.error : "";
@@ -1178,7 +1237,10 @@ app.get("/api/auth/google/callback", async (req, res) => {
       throw new Error("Missing Google OAuth code.");
     }
 
-    const user = await exchangeGoogleCode(code, { intent: oauthState.intent });
+    const user = await exchangeGoogleCode(code, {
+      intent: oauthState.intent,
+      redirectUri
+    });
     const auth = buildAuthResponse(user);
 
     // For SPA convenience in development this redirects with token.
