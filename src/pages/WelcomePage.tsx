@@ -6,6 +6,8 @@ type AuthMode = "signup" | "login";
 
 const signUpView = "signup";
 const loginView = "login";
+const privacyPolicyHref = "/Privacy.pdf";
+const termsOfUseHref = "/Terms.pdf";
 
 function normalizeAuthMode(value: string | null): AuthMode {
   return value === loginView ? loginView : signUpView;
@@ -576,17 +578,29 @@ export function WelcomePage() {
                           />
                         </div>
                         <div className="ml-2 text-xs text-gray-400">
-                          <label htmlFor="terms" className="font-medium">
-                            I agree to the{" "}
-                            <button type="button" className="text-primary hover:underline">
+                          <span className="font-medium">
+                            <label htmlFor="terms">I agree to the </label>
+                            <a
+                              href={termsOfUseHref}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              onClick={(event) => event.stopPropagation()}
+                              className="text-primary hover:underline"
+                            >
                               Terms
-                            </button>{" "}
+                            </a>{" "}
                             and{" "}
-                            <button type="button" className="text-primary hover:underline">
+                            <a
+                              href={privacyPolicyHref}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              onClick={(event) => event.stopPropagation()}
+                              className="text-primary hover:underline"
+                            >
                               Privacy Policy
-                            </button>
+                            </a>
                             .
-                          </label>
+                          </span>
                         </div>
                       </div>
 
@@ -690,7 +704,7 @@ export function WelcomePage() {
               </div>
               <div className="flex space-x-6 text-sm text-gray-500">
                 <a
-                  href="/Privacy.pdf"
+                  href={privacyPolicyHref}
                   target="_blank"
                   rel="noreferrer noopener"
                   className="transition-colors hover:text-white"
@@ -698,7 +712,7 @@ export function WelcomePage() {
                   Privacy
                 </a>
                 <a
-                  href="/Terms.pdf"
+                  href={termsOfUseHref}
                   target="_blank"
                   rel="noreferrer noopener"
                   className="transition-colors hover:text-white"
