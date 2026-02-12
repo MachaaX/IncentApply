@@ -4,9 +4,7 @@ import { useAuth } from "./AuthContext";
 import { AppShell } from "../components/AppShell";
 import { DashboardPage } from "../pages/DashboardPage";
 import { GroupSetupPage } from "../pages/GroupSetupPage";
-import { LoginPage } from "../pages/LoginPage";
 import { MembersPage } from "../pages/MembersPage";
-import { RegisterPage } from "../pages/RegisterPage";
 import { SettlementsPage } from "../pages/SettlementsPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { WalletPage } from "../pages/WalletPage";
@@ -49,6 +47,21 @@ function RootRedirect() {
   return <Navigate to={session ? "/dashboard" : "/welcome"} replace />;
 }
 
+function LegacyAuthRedirect({ mode }: { mode: "signup" | "login" }) {
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+
+  if (mode === "login") {
+    params.set("mode", "login");
+  } else {
+    params.delete("mode");
+  }
+
+  const query = params.toString();
+  const destination = query.length ? `/welcome?${query}` : "/welcome";
+  return <Navigate to={destination} replace state={location.state} />;
+}
+
 function createAppRouter() {
   return createBrowserRouter([
     {
@@ -64,11 +77,11 @@ function createAppRouter() {
         },
         {
           path: "/auth/login",
-          element: <LoginPage />
+          element: <LegacyAuthRedirect mode="login" />
         },
         {
           path: "/auth/register",
-          element: <RegisterPage />
+          element: <LegacyAuthRedirect mode="signup" />
         }
       ]
     },

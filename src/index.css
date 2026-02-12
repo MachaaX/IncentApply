@@ -6,15 +6,34 @@
   font-family: Manrope, sans-serif;
 }
 
+html {
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+#root {
+  min-height: 100%;
+}
+
 * {
   box-sizing: border-box;
 }
 
 body {
   margin: 0;
+  min-height: 100%;
   min-width: 320px;
   background: #10221c;
   color: #e2e8f0;
+  overflow-x: hidden;
+  overflow-y: visible;
+}
+
+::selection {
+  background: #11d493;
+  color: #10221c;
 }
 
 a {
@@ -34,17 +53,96 @@ select {
   outline-offset: 2px;
 }
 
+@keyframes auth-panel-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.auth-panel-enter {
+  animation: auth-panel-enter 220ms ease-out;
+}
+
+@keyframes form-alert-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.form-alert-pop {
+  animation: form-alert-pop 220ms ease-out;
+}
+
+.gold-gradient-text {
+  background: linear-gradient(135deg, #ffd700 0%, #ffaa00 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.welcome-glass-card {
+  background: rgba(22, 46, 38, 0.6);
+  border: 1px solid rgba(17, 212, 147, 0.1);
+  backdrop-filter: blur(12px);
+}
+
+.welcome-checkbox {
+  appearance: none;
+  cursor: pointer;
+  border: 1px solid #374151;
+  background-color: #10221c;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 10px 10px;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    background-color 150ms ease;
+}
+
+.welcome-checkbox:hover {
+  border-color: #11d493;
+}
+
+.welcome-checkbox:checked {
+  border-color: #11d493;
+  background-color: #11d493;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M16.704 5.29a1 1 0 0 1 .006 1.414l-7.263 7.327a1 1 0 0 1-1.42 0L3.29 9.296a1 1 0 1 1 1.414-1.414l4.034 4.034 6.556-6.62a1 1 0 0 1 1.41-.006Z' fill='%2310221c'/%3E%3C/svg%3E");
+}
+
+.welcome-checkbox:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px #11d493,
+    0 0 0 4px #10221c;
+}
+
 /* Improves table scrolling aesthetics */
-::-webkit-scrollbar {
+html::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
-::-webkit-scrollbar-thumb {
-  background: rgba(17, 212, 147, 0.35);
-  border-radius: 9999px;
+html::-webkit-scrollbar-thumb {
+  background: #11d493;
+  border-radius: 4px;
 }
 
-::-webkit-scrollbar-track {
-  background: rgba(17, 212, 147, 0.06);
+html::-webkit-scrollbar-thumb:hover {
+  background: #0ea371;
+}
+
+html::-webkit-scrollbar-track {
+  background: #10221c;
 }

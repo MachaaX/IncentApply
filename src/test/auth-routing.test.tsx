@@ -39,7 +39,7 @@ describe("auth routing", () => {
     renderApp("/auth/login");
     const user = userEvent.setup();
     await user.type(await screen.findByLabelText(/email/i), "alex@incentapply.dev");
-    await user.type(screen.getByLabelText(/password/i), "password123");
+    await user.type(screen.getByLabelText(/password/i, { selector: "input" }), "password123");
     fireEvent.click(await screen.findByRole("button", { name: /log in/i }));
     expect(await screen.findByText(/Group Dashboard/i)).toBeInTheDocument();
   });
@@ -63,6 +63,6 @@ describe("auth routing", () => {
     expect(await screen.findByLabelText(/first name/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/last name/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/password/i, { selector: "input" })).toBeInTheDocument();
   });
 });
