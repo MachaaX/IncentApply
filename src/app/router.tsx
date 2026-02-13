@@ -19,6 +19,7 @@ import { SettlementsPage } from "../pages/SettlementsPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { WalletPage } from "../pages/WalletPage";
 import { WelcomePage } from "../pages/WelcomePage";
+import { getLastOpenedGroupId } from "../utils/groupNavigation";
 
 function ProtectedRoute() {
   const { session, loading } = useAuth();
@@ -65,7 +66,8 @@ function MyGroupsIndexPage() {
     return <p className="p-6 text-sm text-slate-400">Loading groups...</p>;
   }
 
-  const firstGroup = groupsQuery.data?.[0];
+  const groups = groupsQuery.data ?? [];
+  const firstGroup = groups[0];
   if (!firstGroup) {
     const pendingInviteCount = pendingInvitesQuery.data?.length ?? 0;
     const recoverableNotFound =
@@ -106,7 +108,13 @@ function MyGroupsIndexPage() {
     );
   }
 
-  return <Navigate to={`/my-groups/${firstGroup.id}`} replace />;
+  const lastOpenedGroupId = getLastOpenedGroupId();
+  const preferredGroup = lastOpenedGroupId
+    ? groups.find((group) => group.id === lastOpenedGroupId)
+    : undefined;
+  const destinationGroup = preferredGroup ?? firstGroup;
+
+  return <Navigate to={`/my-groups/${destinationGroup.id}`} replace />;
 }
 
 function LegacyAuthRedirect({ mode }: { mode: "signup" | "login" }) {

@@ -55,6 +55,14 @@ export interface Group {
 }
 
 export type GroupGoalCycle = "daily" | "weekly" | "biweekly";
+export type GroupGoalStartDay =
+  | "sunday"
+  | "monday"
+  | "tuesday"
+  | "wednesday"
+  | "thursday"
+  | "friday"
+  | "saturday";
 export type GroupMemberRole = "admin" | "member";
 
 export interface MyGroupSummary {
@@ -63,6 +71,7 @@ export interface MyGroupSummary {
   applicationGoal: number;
   stakeUsd: number;
   goalCycle: GroupGoalCycle;
+  goalStartDay: GroupGoalStartDay;
   myRole: GroupMemberRole;
   weeklyGoal: number;
   weeklyStakeUsd: number;
@@ -79,6 +88,7 @@ export interface PendingGroupInvite {
   groupName: string;
   invitedBy: string;
   goalCycle: GroupGoalCycle;
+  goalStartDay: GroupGoalStartDay;
   applicationGoal: number;
   stakeUsd: number;
   goalApps: number;

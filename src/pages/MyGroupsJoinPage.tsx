@@ -139,7 +139,15 @@ export function MyGroupsJoinPage() {
                       </p>
                       <p className="text-lg font-bold text-white">{invite.groupName}</p>
                       <p className="text-sm text-[#64877a]">
-                        Cycle: <span className="text-[#92c9b7] capitalize">{invite.goalCycle}</span> · Goal:{" "}
+                        Cycle: <span className="text-[#92c9b7] capitalize">{invite.goalCycle}</span>
+                        {invite.goalCycle === "daily" ? null : (
+                          <>
+                            {" "}
+                            · Start Day:{" "}
+                            <span className="text-[#92c9b7] capitalize">{invite.goalStartDay}</span>
+                          </>
+                        )}{" "}
+                        · Goal:{" "}
                         <span className="text-[#92c9b7]">{invite.applicationGoal} apps</span> · Stake:{" "}
                         <span className="text-[#92c9b7]">${invite.stakeUsd}</span>
                       </p>

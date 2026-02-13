@@ -56,6 +56,17 @@ const GROUP_NAME_MAX_LENGTH = 30;
 const INVITE_EXPIRY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_GOAL_CYCLE = "weekly";
 const ALLOWED_GOAL_CYCLES = new Set(["daily", "weekly", "biweekly"]);
+const DEFAULT_GOAL_START_DAY = "monday";
+const ALLOWED_GOAL_START_DAYS = new Set([
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday"
+]);
+const UTC_ISO_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 const entraConfiguredExplicitly = Boolean(
   ENTRA_CLIENT_ID || ENTRA_CLIENT_SECRET || ENTRA_REDIRECT_URI || ENTRA_DISCOVERY_URL
 );
@@ -75,6 +86,28 @@ function createInMemoryPool() {
   const db = newDb();
   const { Pool: InMemoryPool } = db.adapters.createPg();
   return new InMemoryPool();
+}
+
+function formatMySqlTimestamp(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  const pad = (segment) => String(segment).padStart(2, "0");
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(
+    date.getUTCHours()
+  )}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
+}
+
+function normalizeMySqlParamValue(param) {
+  if (param instanceof Date) {
+    return formatMySqlTimestamp(param);
+  }
+  if (typeof param === "string" && UTC_ISO_TIMESTAMP_REGEX.test(param)) {
+    return formatMySqlTimestamp(param);
+  }
+  return param;
 }
 
 function createPostgresPool(connectionString) {
@@ -116,7 +149,8 @@ async function createMySqlPool(connectionString) {
   return {
     async query(sql, params = []) {
       const mysqlSql = sql.replace(/\$\d+/g, "?");
-      const [rows] = await mysqlPool.query(mysqlSql, params);
+      const mysqlParams = params.map((value) => normalizeMySqlParamValue(value));
+      const [rows] = await mysqlPool.query(mysqlSql, mysqlParams);
 
       if (Array.isArray(rows)) {
         return { rows };
@@ -334,6 +368,7 @@ async function initDb() {
         weekly_goal INT NOT NULL,
         weekly_stake_usd INT NOT NULL,
         goal_cycle VARCHAR(16) NOT NULL DEFAULT '${DEFAULT_GOAL_CYCLE}',
+        goal_start_day VARCHAR(16) NOT NULL DEFAULT '${DEFAULT_GOAL_START_DAY}',
         invite_code VARCHAR(64) NOT NULL UNIQUE,
         invite_code_expires_at TIMESTAMP NOT NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -384,6 +419,20 @@ async function initDb() {
       );
     }
 
+    const goalStartDayColumn = await pool.query(`
+      SELECT COUNT(*) AS count
+      FROM information_schema.columns
+      WHERE table_schema = DATABASE()
+        AND table_name = 'app_groups'
+        AND column_name = 'goal_start_day'
+    `);
+
+    if (Number(goalStartDayColumn.rows[0]?.count ?? 0) === 0) {
+      await pool.query(
+        `ALTER TABLE app_groups ADD COLUMN goal_start_day VARCHAR(16) NOT NULL DEFAULT '${DEFAULT_GOAL_START_DAY}'`
+      );
+    }
+
     return;
   }
 
@@ -426,6 +475,7 @@ async function initDb() {
       weekly_goal INT NOT NULL,
       weekly_stake_usd INT NOT NULL,
       goal_cycle TEXT NOT NULL DEFAULT '${DEFAULT_GOAL_CYCLE}',
+      goal_start_day TEXT NOT NULL DEFAULT '${DEFAULT_GOAL_START_DAY}',
       invite_code TEXT NOT NULL UNIQUE,
       invite_code_expires_at TIMESTAMPTZ NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -436,6 +486,11 @@ async function initDb() {
   await pool.query(`
     ALTER TABLE app_groups
     ADD COLUMN IF NOT EXISTS goal_cycle TEXT NOT NULL DEFAULT '${DEFAULT_GOAL_CYCLE}';
+  `);
+
+  await pool.query(`
+    ALTER TABLE app_groups
+    ADD COLUMN IF NOT EXISTS goal_start_day TEXT NOT NULL DEFAULT '${DEFAULT_GOAL_START_DAY}';
   `);
 
   await pool.query(`
@@ -486,6 +541,38 @@ function normalizeGoalCycle(value) {
     .trim()
     .toLowerCase();
   return ALLOWED_GOAL_CYCLES.has(normalized) ? normalized : DEFAULT_GOAL_CYCLE;
+}
+
+function normalizeGoalStartDay(value) {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  return ALLOWED_GOAL_START_DAYS.has(normalized) ? normalized : DEFAULT_GOAL_START_DAY;
+}
+
+function normalizeInviteCode(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const compact = value
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+
+  if (!compact) {
+    return "";
+  }
+
+  if (compact.length === 4) {
+    return `SQ-${compact}`;
+  }
+
+  if (compact.startsWith("SQ") && compact.length > 2) {
+    return `SQ-${compact.slice(2)}`;
+  }
+
+  return compact;
 }
 
 function buildAuthResponse(user) {
@@ -558,8 +645,8 @@ function asIsoTimestamp(value) {
   return new Date().toISOString();
 }
 
-function nowPlusInviteExpiryIso() {
-  return new Date(Date.now() + INVITE_EXPIRY_MS).toISOString();
+function nowPlusInviteExpiryDate() {
+  return new Date(Date.now() + INVITE_EXPIRY_MS);
 }
 
 function resolveOwnerDisplayName(row) {
@@ -573,6 +660,7 @@ function toGroupSummary(row) {
   const applicationGoal = Number(row.weekly_goal ?? 0);
   const stakeUsd = Number(row.weekly_stake_usd ?? 0);
   const goalCycle = normalizeGoalCycle(row.goal_cycle);
+  const goalStartDay = normalizeGoalStartDay(row.goal_start_day);
   const normalizedRole = String(row.my_role ?? "").toLowerCase();
   const myRole = normalizedRole === "admin" || normalizedRole === "owner" ? "admin" : "member";
 
@@ -582,6 +670,7 @@ function toGroupSummary(row) {
     applicationGoal,
     stakeUsd,
     goalCycle,
+    goalStartDay,
     myRole,
     // Backward-compatible fields used in existing frontend code.
     weeklyGoal: applicationGoal,
@@ -601,6 +690,7 @@ function toInviteView(row) {
     groupName: row.group_name ?? row.name,
     invitedBy: resolveOwnerDisplayName(row),
     goalCycle: normalizeGoalCycle(row.goal_cycle),
+    goalStartDay: normalizeGoalStartDay(row.goal_start_day),
     applicationGoal: Number(row.weekly_goal ?? 0),
     stakeUsd: Number(row.weekly_stake_usd ?? 0),
     // Backward-compatible fields used in existing frontend code.
@@ -634,13 +724,33 @@ function normalizeInviteEmails(value, currentUserEmail) {
   return [...unique];
 }
 
-async function createUniqueInviteCode() {
+async function doesInviteCodeExist(code) {
+  const existing = await pool.query(
+    `
+      SELECT id
+      FROM app_groups
+      WHERE REPLACE(REPLACE(UPPER(invite_code), '-', ''), ' ', '') =
+            REPLACE(REPLACE(UPPER($1), '-', ''), ' ', '')
+      LIMIT 1
+    `,
+    [code]
+  );
+  return existing.rows.length > 0;
+}
+
+async function createUniqueInviteCodeWithPreferred(preferredCode = "") {
+  const normalizedPreferredCode = normalizeInviteCode(preferredCode);
+  if (normalizedPreferredCode) {
+    const exists = await doesInviteCodeExist(normalizedPreferredCode);
+    if (!exists) {
+      return normalizedPreferredCode;
+    }
+  }
+
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const candidate = `SQ-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
-    const existing = await pool.query("SELECT id FROM app_groups WHERE invite_code = $1 LIMIT 1", [
-      candidate
-    ]);
-    if (!existing.rows.length) {
+    const exists = await doesInviteCodeExist(candidate);
+    if (!exists) {
       return candidate;
     }
   }
@@ -1812,8 +1922,17 @@ app.post("/api/groups", authMiddleware, async (req, res) => {
       return res.status(404).json({ error: "User not found." });
     }
 
-    const { name, applicationGoal, weeklyGoal, stakeUsd, weeklyStakeUsd, goalCycle, inviteEmails } =
-      req.body ?? {};
+    const {
+      name,
+      applicationGoal,
+      weeklyGoal,
+      stakeUsd,
+      weeklyStakeUsd,
+      goalCycle,
+      goalStartDay,
+      inviteEmails,
+      inviteCode: requestedInviteCode
+    } = req.body ?? {};
     const normalizedName = typeof name === "string" ? name.trim() : "";
     if (!normalizedName) {
       return res.status(400).json({ error: "Group name is required." });
@@ -1834,6 +1953,15 @@ app.post("/api/groups", authMiddleware, async (req, res) => {
       return res.status(400).json({ error: "Stake must be zero or greater." });
     }
     const normalizedCycle = normalizeGoalCycle(goalCycle);
+    const normalizedGoalStartDay = normalizeGoalStartDay(goalStartDay);
+    if (
+      normalizedCycle !== "daily" &&
+      !ALLOWED_GOAL_START_DAYS.has(String(goalStartDay ?? "").trim().toLowerCase())
+    ) {
+      return res.status(400).json({
+        error: "Goal start day is required for weekly and biweekly cycles."
+      });
+    }
 
     const recipients = normalizeInviteEmails(inviteEmails, user.email);
     const missingRecipients = [];
@@ -1852,8 +1980,9 @@ app.post("/api/groups", authMiddleware, async (req, res) => {
       });
     }
 
-    const expiresAt = nowPlusInviteExpiryIso();
-    const inviteCode = await createUniqueInviteCode();
+    const expiresAt = nowPlusInviteExpiryDate();
+    const inviteExpiryValue = poolMode === "mysql" ? formatMySqlTimestamp(expiresAt) : expiresAt;
+    const inviteCode = await createUniqueInviteCodeWithPreferred(requestedInviteCode);
     const groupId = randomUUID();
 
     await pool.query(
@@ -1865,10 +1994,11 @@ app.post("/api/groups", authMiddleware, async (req, res) => {
           weekly_goal,
           weekly_stake_usd,
           goal_cycle,
+          goal_start_day,
           invite_code,
           invite_code_expires_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       `,
       [
         groupId,
@@ -1877,8 +2007,9 @@ app.post("/api/groups", authMiddleware, async (req, res) => {
         Math.round(parsedGoal),
         Math.round(parsedStake),
         normalizedCycle,
+        normalizedGoalStartDay,
         inviteCode,
-        expiresAt
+        inviteExpiryValue
       ]
     );
 
@@ -1897,7 +2028,7 @@ app.post("/api/groups", authMiddleware, async (req, res) => {
           )
           VALUES ($1, $2, $3, $4, 'pending', $5)
         `,
-        [randomUUID(), groupId, recipientEmail, user.id, expiresAt]
+        [randomUUID(), groupId, recipientEmail, user.id, inviteExpiryValue]
       );
     }
 
@@ -1925,7 +2056,7 @@ app.post("/api/groups/join-code", authMiddleware, async (req, res) => {
       return res.status(404).json({ error: "User not found." });
     }
 
-    const inviteCode = typeof req.body?.inviteCode === "string" ? req.body.inviteCode.trim() : "";
+    const inviteCode = normalizeInviteCode(req.body?.inviteCode);
     if (!inviteCode) {
       return res.status(400).json({ error: "Invite code is required." });
     }
@@ -1940,7 +2071,8 @@ app.post("/api/groups/join-code", authMiddleware, async (req, res) => {
         FROM app_groups g
         LEFT JOIN users owner
           ON owner.id = g.owner_user_id
-        WHERE LOWER(g.invite_code) = LOWER($1)
+        WHERE REPLACE(REPLACE(UPPER(g.invite_code), '-', ''), ' ', '') =
+              REPLACE(REPLACE(UPPER($1), '-', ''), ' ', '')
         LIMIT 1
       `,
       [inviteCode]
@@ -1999,6 +2131,7 @@ app.get("/api/groups/invites/pending", authMiddleware, async (req, res) => {
           g.weekly_goal,
           g.weekly_stake_usd,
           g.goal_cycle,
+          g.goal_start_day,
           g.invite_code,
           g.invite_code_expires_at,
           owner.first_name AS owner_first_name,
@@ -2175,7 +2308,8 @@ app.patch("/api/groups/:groupId/settings", authMiddleware, async (req, res) => {
       return res.status(403).json({ error: "Only admins can update group settings." });
     }
 
-    const { applicationGoal, weeklyGoal, stakeUsd, weeklyStakeUsd, goalCycle } = req.body ?? {};
+    const { applicationGoal, weeklyGoal, stakeUsd, weeklyStakeUsd, goalCycle, goalStartDay } =
+      req.body ?? {};
     const parsedGoal = Number(applicationGoal ?? weeklyGoal);
     if (!Number.isFinite(parsedGoal) || parsedGoal < 1) {
       return res.status(400).json({ error: "Application goal must be at least 1." });
@@ -2187,6 +2321,15 @@ app.patch("/api/groups/:groupId/settings", authMiddleware, async (req, res) => {
     }
 
     const normalizedCycle = normalizeGoalCycle(goalCycle);
+    const normalizedGoalStartDay = normalizeGoalStartDay(goalStartDay);
+    if (
+      normalizedCycle !== "daily" &&
+      !ALLOWED_GOAL_START_DAYS.has(String(goalStartDay ?? "").trim().toLowerCase())
+    ) {
+      return res.status(400).json({
+        error: "Goal start day is required for weekly and biweekly cycles."
+      });
+    }
 
     await pool.query(
       `
@@ -2194,10 +2337,17 @@ app.patch("/api/groups/:groupId/settings", authMiddleware, async (req, res) => {
         SET weekly_goal = $2,
             weekly_stake_usd = $3,
             goal_cycle = $4,
+            goal_start_day = $5,
             updated_at = NOW()
         WHERE id = $1
       `,
-      [groupId, Math.round(parsedGoal), Math.round(parsedStake), normalizedCycle]
+      [
+        groupId,
+        Math.round(parsedGoal),
+        Math.round(parsedStake),
+        normalizedCycle,
+        normalizedGoalStartDay
+      ]
     );
 
     const updated = await getGroupByIdForMember(groupId, userId);
@@ -2209,6 +2359,93 @@ app.patch("/api/groups/:groupId/settings", authMiddleware, async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       error: error instanceof Error ? error.message : "Unable to update group settings."
+    });
+  }
+});
+
+app.post("/api/groups/:groupId/invite-code/regenerate", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    if (!userId) {
+      return res.status(401).json({ error: "Missing user identity." });
+    }
+
+    const groupId = String(req.params.groupId ?? "").trim();
+    if (!groupId) {
+      return res.status(400).json({ error: "Group id is required." });
+    }
+
+    const role = await getGroupMemberRole(groupId, userId);
+    if (!role) {
+      return res.status(404).json({ error: "Group not found." });
+    }
+    if (role !== "admin") {
+      return res.status(403).json({ error: "Only admins can regenerate invite code." });
+    }
+
+    const newInviteCode = await createUniqueInviteCodeWithPreferred();
+    const expiresAt = nowPlusInviteExpiryDate();
+    const inviteExpiryValue = poolMode === "mysql" ? formatMySqlTimestamp(expiresAt) : expiresAt;
+
+    await pool.query(
+      `
+        UPDATE app_groups
+        SET invite_code = $2,
+            invite_code_expires_at = $3,
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+      [groupId, newInviteCode, inviteExpiryValue]
+    );
+
+    const updated = await getGroupByIdForMember(groupId, userId);
+    if (!updated) {
+      return res.status(404).json({ error: "Group not found." });
+    }
+
+    return res.status(200).json({ group: toGroupSummary(updated) });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to regenerate invite code."
+    });
+  }
+});
+
+app.delete("/api/groups/:groupId", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    if (!userId) {
+      return res.status(401).json({ error: "Missing user identity." });
+    }
+
+    const groupId = String(req.params.groupId ?? "").trim();
+    if (!groupId) {
+      return res.status(400).json({ error: "Group id is required." });
+    }
+
+    const role = await getGroupMemberRole(groupId, userId);
+    if (!role) {
+      return res.status(404).json({ error: "Group not found." });
+    }
+    if (role !== "admin") {
+      return res.status(403).json({ error: "Only admins can delete groups." });
+    }
+
+    const deleted = await pool.query(
+      `
+        DELETE FROM app_groups
+        WHERE id = $1
+      `,
+      [groupId]
+    );
+    if (Number(deleted.rowCount ?? 0) === 0) {
+      return res.status(404).json({ error: "Group not found." });
+    }
+
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to delete group."
     });
   }
 });

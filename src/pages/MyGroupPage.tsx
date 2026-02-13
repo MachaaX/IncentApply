@@ -1,8 +1,13 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { mockMyGroups, type MockGroupMember } from "../mocks/data/mockMyGroups";
-import { useMyGroupSummary, useUpdateGroupSettings } from "../hooks/useAppQueries";
-import type { GroupGoalCycle } from "../domain/types";
+import {
+  useDeleteGroup,
+  useMyGroupSummary,
+  useRegenerateGroupInviteCode,
+  useUpdateGroupSettings
+} from "../hooks/useAppQueries";
+import type { GroupGoalCycle, GroupGoalStartDay } from "../domain/types";
 import { centsToUsd } from "../utils/format";
 
 function initials(name: string): string {
@@ -90,16 +95,40 @@ function activityIconClass(tone: "success" | "warning" | "danger"): string {
   return "bg-primary/20 text-primary";
 }
 
+function formatDateLabel(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString();
+}
+
+const goalStartDayOptions: Array<{ value: GroupGoalStartDay; label: string }> = [
+  { value: "sunday", label: "Sunday" },
+  { value: "monday", label: "Monday" },
+  { value: "tuesday", label: "Tuesday" },
+  { value: "wednesday", label: "Wednesday" },
+  { value: "thursday", label: "Thursday" },
+  { value: "friday", label: "Friday" },
+  { value: "saturday", label: "Saturday" }
+];
+
 export function MyGroupPage() {
+  const navigate = useNavigate();
   const { groupId } = useParams<{ groupId: string }>();
   const groupSummaryQuery = useMyGroupSummary(groupId);
   const updateGroupSettings = useUpdateGroupSettings();
+  const regenerateInviteCode = useRegenerateGroupInviteCode();
+  const deleteGroup = useDeleteGroup();
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [goalCycle, setGoalCycle] = useState<GroupGoalCycle>("weekly");
+  const [goalStartDay, setGoalStartDay] = useState<GroupGoalStartDay>("monday");
   const [applicationGoal, setApplicationGoal] = useState(20);
   const [stakeUsd, setStakeUsd] = useState(15);
   const [settingsStatus, setSettingsStatus] = useState<string | null>(null);
+  const [settingsStatusTone, setSettingsStatusTone] = useState<"success" | "warning">("success");
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
     const summary = groupSummaryQuery.data;
@@ -107,9 +136,17 @@ export function MyGroupPage() {
       return;
     }
     setGoalCycle(summary.goalCycle);
+    setGoalStartDay(summary.goalStartDay);
     setApplicationGoal(summary.applicationGoal);
     setStakeUsd(summary.stakeUsd);
   }, [groupSummaryQuery.data]);
+
+  useEffect(() => {
+    if (settingsOpen) {
+      return;
+    }
+    setConfirmDelete(false);
+  }, [settingsOpen]);
 
   if (groupSummaryQuery.isLoading) {
     return <p className="text-sm text-slate-400">Loading group...</p>;
@@ -144,15 +181,58 @@ export function MyGroupPage() {
     }
     setSettingsStatus(null);
     try {
+      setConfirmDelete(false);
       await updateGroupSettings.mutateAsync({
         groupId,
         goalCycle,
+        goalStartDay,
         applicationGoal,
         stakeUsd
       });
+      setSettingsStatusTone("success");
       setSettingsStatus("Group settings saved.");
     } catch (reason) {
+      setSettingsStatusTone("warning");
       setSettingsStatus(reason instanceof Error ? reason.message : "Unable to save settings.");
+    }
+  };
+
+  const handleRegenerateInviteCode = async () => {
+    if (!groupId || !isAdmin) {
+      return;
+    }
+
+    setSettingsStatus(null);
+    try {
+      setConfirmDelete(false);
+      const updated = await regenerateInviteCode.mutateAsync(groupId);
+      setSettingsStatusTone("success");
+      setSettingsStatus(`Invite code regenerated: ${updated.inviteCode}`);
+    } catch (reason) {
+      setSettingsStatusTone("warning");
+      setSettingsStatus(reason instanceof Error ? reason.message : "Unable to regenerate invite code.");
+    }
+  };
+
+  const handleDeleteGroup = async () => {
+    if (!groupId || !isAdmin) {
+      return;
+    }
+
+    if (!confirmDelete) {
+      setConfirmDelete(true);
+      setSettingsStatusTone("warning");
+      setSettingsStatus("Click Delete Group again to permanently remove this group and all data.");
+      return;
+    }
+
+    setSettingsStatus(null);
+    try {
+      await deleteGroup.mutateAsync(groupId);
+      navigate("/my-groups", { replace: true });
+    } catch (reason) {
+      setSettingsStatusTone("warning");
+      setSettingsStatus(reason instanceof Error ? reason.message : "Unable to delete group.");
     }
   };
 
@@ -163,8 +243,19 @@ export function MyGroupPage() {
           <div>
             <h1 className="text-3xl font-black text-white">{summary.name}</h1>
             <p className="mt-1 text-sm text-[#92c9b7]">
-              Cycle: <span className="capitalize">{summary.goalCycle}</span> · Application Goal:{" "}
-              {summary.applicationGoal} · Stake: {centsToUsd(summary.stakeUsd * 100)}
+              Cycle: <span className="capitalize">{summary.goalCycle}</span>
+              {summary.goalCycle === "daily" ? null : (
+                <>
+                  {" "}
+                  · Start Day: <span className="capitalize">{summary.goalStartDay}</span>
+                </>
+              )}{" "}
+              · Application Goal: {summary.applicationGoal} · Stake: {centsToUsd(summary.stakeUsd * 100)}
+            </p>
+            <p className="mt-1 text-xs text-[#64877a]">
+              Invite Code: <span className="font-semibold text-[#92c9b7]">{summary.inviteCode}</span> ·
+              Expires:{" "}
+              <span className="text-[#92c9b7]">{formatDateLabel(summary.inviteCodeExpiresAt)}</span>
             </p>
           </div>
           {isAdmin ? (
@@ -181,7 +272,7 @@ export function MyGroupPage() {
 
         {isAdmin && settingsOpen ? (
           <div className="mt-4 space-y-4 rounded-xl border border-primary/20 bg-background-dark/40 p-4">
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               <label className="space-y-1 text-sm">
                 <span className="block text-xs font-semibold uppercase tracking-wide text-slate-400">
                   Goal Cycle
@@ -194,6 +285,23 @@ export function MyGroupPage() {
                   <option value="daily">Daily</option>
                   <option value="weekly">Weekly</option>
                   <option value="biweekly">Biweekly</option>
+                </select>
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Goal Start Day
+                </span>
+                <select
+                  value={goalStartDay}
+                  onChange={(event) => setGoalStartDay(event.target.value as GroupGoalStartDay)}
+                  disabled={goalCycle === "daily"}
+                  className="w-full rounded-lg border border-border-dark bg-background-dark px-3 py-2 text-white focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {goalStartDayOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
               </label>
               <label className="space-y-1 text-sm">
@@ -225,12 +333,32 @@ export function MyGroupPage() {
               <button
                 type="button"
                 onClick={() => void saveSettings()}
-                disabled={updateGroupSettings.isPending}
+                disabled={updateGroupSettings.isPending || regenerateInviteCode.isPending}
                 className="rounded-lg bg-primary px-4 py-2 text-sm font-bold text-background-dark disabled:opacity-70"
               >
                 {updateGroupSettings.isPending ? "Saving..." : "Save Settings"}
               </button>
-              {settingsStatus ? <p className="text-sm text-[#92c9b7]">{settingsStatus}</p> : null}
+              <button
+                type="button"
+                onClick={() => void handleRegenerateInviteCode()}
+                disabled={updateGroupSettings.isPending || regenerateInviteCode.isPending}
+                className="rounded-lg border border-primary/35 bg-primary/10 px-4 py-2 text-sm font-bold text-primary transition-colors hover:bg-primary/20 disabled:opacity-70"
+              >
+                {regenerateInviteCode.isPending ? "Generating..." : "Generate New Invite Code"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDeleteGroup()}
+                disabled={deleteGroup.isPending || regenerateInviteCode.isPending}
+                className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm font-bold text-red-300 transition-colors hover:bg-red-500/20 disabled:opacity-70"
+              >
+                {deleteGroup.isPending ? "Deleting..." : confirmDelete ? "Confirm Delete Group" : "Delete Group"}
+              </button>
+              {settingsStatus ? (
+                <p className={`text-sm ${settingsStatusTone === "warning" ? "text-secondary-gold" : "text-[#92c9b7]"}`}>
+                  {settingsStatus}
+                </p>
+              ) : null}
             </div>
           </div>
         ) : null}

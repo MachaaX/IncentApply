@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../app/AuthContext";
 import { useMyGroupsList, usePendingInvites } from "../hooks/useAppQueries";
+import { getLastOpenedGroupId, setLastOpenedGroupId } from "../utils/groupNavigation";
 
 const routeTitle: Record<string, string> = {
   "/my-groups": "My Groups",
@@ -17,7 +18,6 @@ const mockNotifications = [
   { id: "notif-2", message: "You are behind the goal this week" },
   { id: "notif-3", message: "You have a group invite in My Groups" }
 ];
-const selectedMockGroupStorageKey = "incentapply_selected_mock_group_id";
 
 function getUserInitials(firstName?: string, lastName?: string): string {
   const first = firstName?.trim().charAt(0) ?? "";
@@ -36,7 +36,10 @@ export function TopNav() {
   const [groupMenuOpen, setGroupMenuOpen] = useState(false);
   const groupMenuRef = useRef<HTMLDivElement | null>(null);
   const isMyGroupsRoute = location.pathname.startsWith("/my-groups");
-  const currentGroupId = isMyGroupsRoute ? location.pathname.split("/")[2] : undefined;
+  const currentGroupId = useMemo(() => {
+    const match = location.pathname.match(/^\/my-groups\/([^/]+)$/);
+    return match ? match[1] : undefined;
+  }, [location.pathname]);
 
   const title = useMemo(() => {
     if (isMyGroupsRoute) {
@@ -52,15 +55,12 @@ export function TopNav() {
   const routeGroupId = groupLinks.some((group) => group.id === currentGroupId)
     ? currentGroupId
     : undefined;
-  const storedGroupId =
-    typeof window !== "undefined"
-      ? window.localStorage.getItem(selectedMockGroupStorageKey) ?? undefined
-      : undefined;
+  const storedGroupId = getLastOpenedGroupId();
   const activeGroupId =
     routeGroupId ??
     (groupLinks.some((group) => group.id === storedGroupId) ? storedGroupId : undefined) ??
     groupLinks[0]?.id;
-  const activeGroup = groupLinks.find((group) => group.id === activeGroupId);
+  const highlightedGroupId = routeGroupId ?? activeGroupId;
 
   const startFreshCreateGroup = () => {
     window.dispatchEvent(new Event("incentapply:create-group-fresh-start"));
@@ -73,10 +73,10 @@ export function TopNav() {
   }, [location.pathname]);
 
   useEffect(() => {
-    if (!routeGroupId || typeof window === "undefined") {
+    if (!routeGroupId) {
       return;
     }
-    window.localStorage.setItem(selectedMockGroupStorageKey, routeGroupId);
+    setLastOpenedGroupId(routeGroupId);
   }, [routeGroupId]);
 
   useEffect(() => {
@@ -91,6 +91,13 @@ export function TopNav() {
     window.addEventListener("mousedown", onMouseDown);
     return () => window.removeEventListener("mousedown", onMouseDown);
   }, []);
+
+  useEffect(() => {
+    if (!groupMenuOpen) {
+      return;
+    }
+    void myGroupsQuery.refetch();
+  }, [groupMenuOpen, myGroupsQuery]);
 
   const groupsButtonClass = `inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-bold transition-all ${
     groupMenuOpen
@@ -108,7 +115,7 @@ export function TopNav() {
     <>
       <header className="sticky top-0 z-10 flex h-20 items-center justify-between border-b border-primary/10 bg-background-dark/85 px-6 backdrop-blur-md">
         {isMyGroupsRoute ? (
-          <div className="flex min-w-0 items-center gap-2 overflow-x-auto pr-2">
+          <div className="flex min-w-0 items-center gap-2 pr-2">
             <div ref={groupMenuRef} className="relative">
               <button
                 type="button"
@@ -117,13 +124,13 @@ export function TopNav() {
                 aria-label="Open my groups list"
                 aria-expanded={groupMenuOpen}
               >
-                <span>{activeGroup ? activeGroup.name : "My Groups"}</span>
+                <span>My Groups</span>
                 <span
-                  className={`material-icons text-base transition-transform ${
+                  className={`material-icons ml-0.5 text-[22px] leading-none text-white transition-transform ${
                     groupMenuOpen ? "rotate-180" : ""
                   }`}
                 >
-                  expand_more
+                  arrow_drop_down
                 </span>
               </button>
 
@@ -132,7 +139,15 @@ export function TopNav() {
                   <p className="border-b border-primary/10 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
                     Your Groups
                   </p>
-                  {groupLinks.length ? (
+                  {myGroupsQuery.isLoading ? (
+                    <p className="px-3 py-3 text-sm text-slate-400">Loading groups...</p>
+                  ) : myGroupsQuery.error ? (
+                    <p className="px-3 py-3 text-sm text-secondary-gold">
+                      {myGroupsQuery.error instanceof Error
+                        ? myGroupsQuery.error.message
+                        : "Unable to load groups."}
+                    </p>
+                  ) : groupLinks.length ? (
                     <ul className="py-1">
                       {groupLinks.map((group) => (
                         <li key={group.id}>
@@ -140,19 +155,16 @@ export function TopNav() {
                             type="button"
                             onClick={() => {
                               setGroupMenuOpen(false);
-                              if (typeof window !== "undefined") {
-                                window.localStorage.setItem(selectedMockGroupStorageKey, group.id);
-                              }
+                              setLastOpenedGroupId(group.id);
                               navigate(`/my-groups/${group.id}`);
                             }}
                             className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors ${
-                              group.id === activeGroupId
+                              group.id === highlightedGroupId
                                 ? "bg-primary/15 text-primary"
                                 : "text-slate-200 hover:bg-primary/10 hover:text-white"
                             }`}
                           >
                             <span>{group.name}</span>
-                            <span className="text-xs text-slate-500">{group.id}</span>
                           </button>
                         </li>
                       ))}

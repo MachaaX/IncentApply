@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useCheckUserExistsByEmail, useCreateGroup } from "../hooks/useAppQueries";
+import type { GroupGoalStartDay } from "../domain/types";
 import { centsToUsd } from "../utils/format";
 
 const GROUP_NAME_LIMIT = 30;
@@ -16,6 +17,16 @@ const cycleOptions: Array<{ value: GoalCycle; label: string }> = [
   { value: "daily", label: "Daily" },
   { value: "weekly", label: "Weekly" },
   { value: "biweekly", label: "Biweekly" }
+];
+
+const goalStartDayOptions: Array<{ value: GroupGoalStartDay; label: string }> = [
+  { value: "sunday", label: "Sunday" },
+  { value: "monday", label: "Monday" },
+  { value: "tuesday", label: "Tuesday" },
+  { value: "wednesday", label: "Wednesday" },
+  { value: "thursday", label: "Thursday" },
+  { value: "friday", label: "Friday" },
+  { value: "saturday", label: "Saturday" }
 ];
 
 function isValidEmail(email: string): boolean {
@@ -36,6 +47,7 @@ export function MyGroupsCreatePage() {
   const [goal, setGoal] = useState(20);
   const [stake, setStake] = useState(15);
   const [goalCycle, setGoalCycle] = useState<GoalCycle>("weekly");
+  const [goalStartDay, setGoalStartDay] = useState<GroupGoalStartDay>("monday");
   const [inviteEmailInput, setInviteEmailInput] = useState("");
   const [inviteEmails, setInviteEmails] = useState<string[]>([]);
   const [status, setStatus] = useState<string | null>(null);
@@ -47,6 +59,7 @@ export function MyGroupsCreatePage() {
     setGoal(20);
     setStake(15);
     setGoalCycle("weekly");
+    setGoalStartDay("monday");
     setInviteEmailInput("");
     setInviteEmails([]);
     setStatus(null);
@@ -78,8 +91,7 @@ export function MyGroupsCreatePage() {
     }
 
     if (trimmedName.length > GROUP_NAME_LIMIT) {
-      window.alert("Group name must stay within 30 characters before continuing.");
-      setStatus("Please keep the group name within 30 characters.");
+      setStatus("Group name must stay within 30 characters before continuing.");
       return;
     }
 
@@ -104,10 +116,9 @@ export function MyGroupsCreatePage() {
     try {
       const exists = await checkUserExists.mutateAsync(normalized);
       if (!exists) {
-        window.alert(
+        setStatus(
           "This user does not exist. Ask them to sign up first, or send them the invite code instead."
         );
-        setStatus("User not found in database.");
         return;
       }
 
@@ -116,6 +127,28 @@ export function MyGroupsCreatePage() {
       setStatus(null);
     } catch (reason) {
       setStatus(reason instanceof Error ? reason.message : "Unable to verify user email.");
+    }
+  };
+
+  const copyInviteCode = async () => {
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(codePreview);
+      } else if (typeof document !== "undefined") {
+        const fallbackInput = document.createElement("textarea");
+        fallbackInput.value = codePreview;
+        fallbackInput.style.position = "fixed";
+        fallbackInput.style.left = "-9999px";
+        document.body.appendChild(fallbackInput);
+        fallbackInput.select();
+        document.execCommand("copy");
+        document.body.removeChild(fallbackInput);
+      } else {
+        throw new Error("Clipboard not available.");
+      }
+      setStatus("Invite code copied to clipboard.");
+    } catch {
+      setStatus("Unable to copy invite code. Please copy it manually.");
     }
   };
 
@@ -130,8 +163,7 @@ export function MyGroupsCreatePage() {
       return;
     }
     if (trimmedName.length > GROUP_NAME_LIMIT) {
-      window.alert("Group name must stay within 30 characters before creating the group.");
-      setStatus("Please keep the group name within 30 characters.");
+      setStatus("Group name must stay within 30 characters before creating the group.");
       return;
     }
 
@@ -141,7 +173,9 @@ export function MyGroupsCreatePage() {
         applicationGoal: goal,
         stakeUsd: stake,
         goalCycle,
-        inviteEmails
+        goalStartDay,
+        inviteEmails,
+        inviteCode: codePreview
       });
       navigate(`/my-groups/${createdGroup.group.id}`);
     } catch (reason) {
@@ -242,23 +276,46 @@ export function MyGroupsCreatePage() {
                     <p className="text-xs text-[#64877a]">{name.length}/{GROUP_NAME_LIMIT}</p>
                   </label>
 
-                  <div className="space-y-3 border-t border-border-dark pt-4">
-                    <p className="text-base font-medium text-white">Goal Cycle</p>
-                    <div className="inline-flex rounded-lg border border-border-dark bg-[#10221c] p-1">
-                      {cycleOptions.map((option) => (
-                        <button
-                          key={option.value}
-                          type="button"
-                          onClick={() => setGoalCycle(option.value)}
-                          className={`rounded-md px-4 py-2 text-sm font-bold transition-colors ${
-                            goalCycle === option.value
-                              ? "bg-primary text-background-dark"
-                              : "text-[#92c9b7] hover:text-white"
-                          }`}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
+                  <div className="grid gap-4 border-t border-border-dark pt-4 md:grid-cols-2">
+                    <div className="space-y-3">
+                      <p className="text-base font-medium text-white">Goal Cycle</p>
+                      <div className="inline-flex rounded-lg border border-border-dark bg-[#10221c] p-1">
+                        {cycleOptions.map((option) => (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => setGoalCycle(option.value)}
+                            className={`rounded-md px-4 py-2 text-sm font-bold transition-colors ${
+                              goalCycle === option.value
+                                ? "bg-primary text-background-dark"
+                                : "text-[#92c9b7] hover:text-white"
+                            }`}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <p className="text-base font-medium text-white">Goal Start Day</p>
+                      <select
+                        value={goalStartDay}
+                        onChange={(event) => setGoalStartDay(event.target.value as GroupGoalStartDay)}
+                        disabled={goalCycle === "daily"}
+                        className="w-full rounded-lg border border-border-dark bg-[#10221c] px-3 py-2 text-sm font-semibold text-white focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {goalStartDayOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-[#64877a]">
+                        {goalCycle === "daily"
+                          ? "Start day applies only to weekly/biweekly cycles."
+                          : `Cycles restart every ${goalStartDay} at 12:00 AM.`}
+                      </p>
                     </div>
                   </div>
 
@@ -327,9 +384,20 @@ export function MyGroupsCreatePage() {
                     <p className="text-xs font-semibold uppercase tracking-wide text-[#92c9b7]">
                       Group Invite Code
                     </p>
-                    <p className="mt-1 text-2xl font-black text-white">{codePreview}</p>
+                    <div className="mt-1 flex items-center gap-2">
+                      <p className="text-2xl font-black text-white">{codePreview}</p>
+                      <button
+                        type="button"
+                        onClick={() => void copyInviteCode()}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-primary/30 bg-[#162e26] text-primary transition-colors hover:bg-[#1f4236]"
+                        aria-label="Copy invite code"
+                        title="Copy invite code"
+                      >
+                        <span className="material-icons text-base">content_copy</span>
+                      </button>
+                    </div>
                     <p className="mt-2 text-xs text-[#64877a]">
-                      Final invite code and expiry are written to the database when you click Create
+                      This invite code is reserved and written to the database when you click Create
                       Group.
                     </p>
                   </div>
@@ -337,8 +405,15 @@ export function MyGroupsCreatePage() {
                   <div className="rounded-xl border border-primary/20 bg-[#11221c] p-4">
                     <p className="text-sm font-bold text-white">Current Settings</p>
                     <p className="mt-1 text-xs text-[#64877a]">
-                      Cycle: <span className="text-[#92c9b7] capitalize">{goalCycle}</span> · Goal:{" "}
-                      <span className="text-[#92c9b7]">{goal} apps</span> · Stake:{" "}
+                      Cycle: <span className="text-[#92c9b7] capitalize">{goalCycle}</span>
+                      {goalCycle === "daily" ? null : (
+                        <>
+                          {" "}
+                          · Start Day:{" "}
+                          <span className="text-[#92c9b7] capitalize">{goalStartDay}</span>
+                        </>
+                      )}{" "}
+                      · Goal: <span className="text-[#92c9b7]">{goal} apps</span> · Stake:{" "}
                       <span className="text-[#92c9b7]">{centsToUsd(stake * 100)}</span>
                     </p>
                   </div>
@@ -428,7 +503,7 @@ export function MyGroupsCreatePage() {
                   </button>
                 )}
               </div>
-              {status ? <p className="mt-2 text-sm text-primary">{status}</p> : null}
+              {status ? <p className="mt-2 text-sm text-secondary-gold">{status}</p> : null}
             </div>
           </div>
         </div>

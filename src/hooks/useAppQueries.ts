@@ -206,7 +206,16 @@ export function useCreateGroup() {
       applicationGoal: number;
       stakeUsd: number;
       goalCycle: "daily" | "weekly" | "biweekly";
+      goalStartDay:
+        | "sunday"
+        | "monday"
+        | "tuesday"
+        | "wednesday"
+        | "thursday"
+        | "friday"
+        | "saturday";
       inviteEmails: string[];
+      inviteCode?: string;
     }) => groupService.createGroup(input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["my-groups-list"] });
@@ -240,9 +249,44 @@ export function useUpdateGroupSettings() {
       applicationGoal: number;
       stakeUsd: number;
       goalCycle: "daily" | "weekly" | "biweekly";
+      goalStartDay:
+        | "sunday"
+        | "monday"
+        | "tuesday"
+        | "wednesday"
+        | "thursday"
+        | "friday"
+        | "saturday";
     }) => groupService.updateGroupSettings(input),
     onSuccess: (_, input) => {
       void queryClient.invalidateQueries({ queryKey: ["my-group-summary", input.groupId] });
+      void queryClient.invalidateQueries({ queryKey: ["my-groups-list"] });
+      void queryClient.invalidateQueries({ queryKey: ["pending-invites"] });
+    }
+  });
+}
+
+export function useDeleteGroup() {
+  const { groupService } = useServices();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (groupId: string) => groupService.deleteGroup(groupId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["my-groups-list"] });
+      void queryClient.invalidateQueries({ queryKey: ["pending-invites"] });
+      void queryClient.invalidateQueries({ queryKey: ["group"] });
+      void queryClient.invalidateQueries({ queryKey: ["members"] });
+    }
+  });
+}
+
+export function useRegenerateGroupInviteCode() {
+  const { groupService } = useServices();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (groupId: string) => groupService.regenerateInviteCode(groupId),
+    onSuccess: (_, groupId) => {
+      void queryClient.invalidateQueries({ queryKey: ["my-group-summary", groupId] });
       void queryClient.invalidateQueries({ queryKey: ["my-groups-list"] });
       void queryClient.invalidateQueries({ queryKey: ["pending-invites"] });
     }

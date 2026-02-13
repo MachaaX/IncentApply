@@ -4,6 +4,7 @@ import type {
   AuthSession,
   BankAccount,
   Group,
+  GroupGoalStartDay,
   MyGroupSummary,
   PendingGroupInvite,
   LeaderboardEntry,
@@ -54,6 +55,7 @@ interface BackendGroupSummary {
   applicationGoal: number;
   stakeUsd: number;
   goalCycle: "daily" | "weekly" | "biweekly";
+  goalStartDay: GroupGoalStartDay;
   myRole: "admin" | "member";
   weeklyGoal: number;
   weeklyStakeUsd: number;
@@ -83,6 +85,7 @@ interface BackendPendingInvite {
   groupName: string;
   invitedBy: string;
   goalCycle: "daily" | "weekly" | "biweekly";
+  goalStartDay: GroupGoalStartDay;
   applicationGoal: number;
   stakeUsd: number;
   goalApps: number;
@@ -97,6 +100,10 @@ interface BackendPendingInvitesResponse {
 }
 
 interface BackendInviteRejectResponse {
+  ok: boolean;
+}
+
+interface BackendDeleteGroupResponse {
   ok: boolean;
 }
 
@@ -141,6 +148,7 @@ function mapBackendGroupSummary(entry: BackendGroupSummary): MyGroupSummary {
     applicationGoal,
     stakeUsd,
     goalCycle: entry.goalCycle ?? "weekly",
+    goalStartDay: entry.goalStartDay ?? "monday",
     myRole: entry.myRole ?? "member",
     weeklyGoal: applicationGoal,
     weeklyStakeUsd: stakeUsd,
@@ -162,6 +170,7 @@ function mapBackendPendingInvite(entry: BackendPendingInvite): PendingGroupInvit
     groupName: entry.groupName,
     invitedBy: entry.invitedBy,
     goalCycle: entry.goalCycle ?? "weekly",
+    goalStartDay: entry.goalStartDay ?? "monday",
     applicationGoal,
     stakeUsd,
     goalApps: applicationGoal,
@@ -504,6 +513,7 @@ function localGroupToSummary(group: Group): MyGroupSummary {
     applicationGoal: group.weeklyGoal,
     stakeUsd: (group.rules.baseStakeCents + group.rules.goalLockedStakeCents) / 100,
     goalCycle: "weekly",
+    goalStartDay: group.weekConfig.weekStartsOn,
     myRole: "admin",
     weeklyGoal: group.weeklyGoal,
     weeklyStakeUsd: (group.rules.baseStakeCents + group.rules.goalLockedStakeCents) / 100,
@@ -911,7 +921,8 @@ const groupService: GroupService = {
 
   async createGroup(input) {
     if (!backendAuthEnabled()) {
-      const code = `SQ-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+      const code = (input.inviteCode?.trim() || "").toUpperCase() ||
+        `SQ-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
       const next = updateState((current) => ({
         ...current,
         group: {
@@ -940,7 +951,8 @@ const groupService: GroupService = {
       });
     } catch (error) {
       if (shouldFallbackToMock(error)) {
-        const code = `SQ-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+        const code = (input.inviteCode?.trim() || "").toUpperCase() ||
+          `SQ-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
         const next = updateState((current) => ({
           ...current,
           group: {
@@ -1039,7 +1051,8 @@ const groupService: GroupService = {
           body: JSON.stringify({
             applicationGoal: input.applicationGoal,
             stakeUsd: input.stakeUsd,
-            goalCycle: input.goalCycle
+            goalCycle: input.goalCycle,
+            goalStartDay: input.goalStartDay
           })
         }
       );
@@ -1055,6 +1068,63 @@ const groupService: GroupService = {
               ...current.group.rules,
               baseStakeCents: Math.round(input.stakeUsd * 100)
             }
+          }
+        }));
+        return withLatency(localGroupToSummary(next.group));
+      }
+      throw error;
+    }
+  },
+
+  async deleteGroup(groupId) {
+    if (!backendAuthEnabled()) {
+      return withLatency(undefined);
+    }
+
+    try {
+      await backendRequest<BackendDeleteGroupResponse>(`/api/groups/${groupId}`, {
+        method: "DELETE"
+      });
+      return withLatency(undefined);
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        return withLatency(undefined);
+      }
+      throw error;
+    }
+  },
+
+  async regenerateInviteCode(groupId) {
+    if (!backendAuthEnabled()) {
+      const code = `SQ-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+      const next = updateState((current) => ({
+        ...current,
+        group: {
+          ...current.group,
+          id: groupId,
+          inviteCode: code
+        }
+      }));
+      return withLatency(localGroupToSummary(next.group));
+    }
+
+    try {
+      const payload = await backendRequest<BackendGroupResponse>(
+        `/api/groups/${groupId}/invite-code/regenerate`,
+        {
+          method: "POST"
+        }
+      );
+      return withLatency(mapBackendGroupSummary(payload.group));
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        const code = `SQ-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+        const next = updateState((current) => ({
+          ...current,
+          group: {
+            ...current.group,
+            id: groupId,
+            inviteCode: code
           }
         }));
         return withLatency(localGroupToSummary(next.group));

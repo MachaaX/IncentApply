@@ -5,6 +5,7 @@ import type {
   BankAccount,
   GmailSyncState,
   Group,
+  GroupGoalStartDay,
   MyGroupSummary,
   PendingGroupInvite,
   LeaderboardEntry,
@@ -42,7 +43,9 @@ export interface GroupService {
     applicationGoal: number;
     stakeUsd: number;
     goalCycle: "daily" | "weekly" | "biweekly";
+    goalStartDay: GroupGoalStartDay;
     inviteEmails: string[];
+    inviteCode?: string;
   }): Promise<{ group: MyGroupSummary; invitesCreated: number }>;
   checkUserExistsByEmail(email: string): Promise<boolean>;
   updateGroupSettings(input: {
@@ -50,6 +53,7 @@ export interface GroupService {
     applicationGoal: number;
     stakeUsd: number;
     goalCycle: "daily" | "weekly" | "biweekly";
+    goalStartDay: GroupGoalStartDay;
   }): Promise<MyGroupSummary>;
   getPendingInvites(): Promise<PendingGroupInvite[]>;
   respondToInvite(inviteId: string, action: "accept" | "reject"): Promise<MyGroupSummary | null>;
@@ -60,6 +64,8 @@ export interface GroupService {
   updateGoal(input: { weeklyGoal: number; adminGoalNote?: string }): Promise<Group>;
   updateGroupName(name: string): Promise<Group>;
   joinWithInviteCode(inviteCode: string): Promise<MyGroupSummary>;
+  regenerateInviteCode(groupId: string): Promise<MyGroupSummary>;
+  deleteGroup(groupId: string): Promise<void>;
 }
 
 export interface ApplicationService {
