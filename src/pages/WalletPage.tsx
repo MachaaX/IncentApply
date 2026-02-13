@@ -361,59 +361,12 @@ export function WalletPage() {
 
                 <button
                   type="button"
-                  onClick={() => setWithdrawOpen((open) => !open)}
+                  onClick={() => setWithdrawOpen(true)}
                   className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary py-4 font-bold text-background-dark shadow-lg shadow-primary/20 transition-all hover:scale-[1.01] hover:bg-primary-dark active:scale-[0.99]"
                 >
-                  <span>{withdrawOpen ? "Hide Withdraw" : "Withdraw Funds"}</span>
+                  <span>Withdraw Funds</span>
                   <span className="material-icons text-lg">arrow_outward</span>
                 </button>
-
-                {withdrawOpen ? (
-                  <form
-                    onSubmit={submitWithdrawal}
-                    className="mt-4 space-y-3 rounded-lg border border-primary/20 bg-background-dark p-3"
-                  >
-                    <label className="block">
-                      <span className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
-                        Amount (USD)
-                      </span>
-                      <input
-                        type="number"
-                        min={0}
-                        step="0.01"
-                        value={withdrawAmount}
-                        onChange={(event) => setWithdrawAmount(event.target.value)}
-                        className="w-full rounded-lg border border-border-dark bg-surface-darker px-3 py-2 text-sm text-white outline-none transition-colors focus:border-primary"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
-                        Destination
-                      </span>
-                      <select
-                        value={selectedBank}
-                        onChange={(event) => setSelectedBank(event.target.value)}
-                        className="w-full rounded-lg border border-border-dark bg-surface-darker px-3 py-2 text-sm text-white outline-none transition-colors focus:border-primary"
-                      >
-                        <option value="">
-                          Primary ({primaryBank ? `${primaryBank.bankName} •••• ${primaryBank.last4}` : "None"})
-                        </option>
-                        {wallet.bankAccounts.map((account) => (
-                          <option key={account.id} value={account.id}>
-                            {account.bankName} •••• {account.last4}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <button
-                      type="submit"
-                      disabled={withdrawMutation.isPending}
-                      className="w-full rounded-lg border border-primary/35 bg-primary/15 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/25 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {withdrawMutation.isPending ? "Processing..." : "Confirm Withdrawal"}
-                    </button>
-                  </form>
-                ) : null}
               </div>
             </section>
 
@@ -589,6 +542,77 @@ export function WalletPage() {
           </div>
         </div>
       </div>
+
+      {withdrawOpen ? (
+        <>
+          <button
+            type="button"
+            className="fixed inset-0 z-40 bg-black/55"
+            onClick={() => setWithdrawOpen(false)}
+            aria-label="Close withdrawal modal backdrop"
+          />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <section className="relative w-full max-w-md rounded-xl border border-primary/20 bg-surface-dark p-5 shadow-2xl">
+              <button
+                type="button"
+                onClick={() => setWithdrawOpen(false)}
+                className="absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center rounded-full border border-primary/20 text-slate-300 transition-colors hover:text-white"
+                aria-label="Cancel withdrawal modal"
+              >
+                <span className="material-icons text-base">close</span>
+              </button>
+
+              <h4 className="text-base font-semibold text-white">Withdraw Funds</h4>
+              <p className="mt-1 text-sm text-slate-400">Move money from wallet to your linked account.</p>
+
+              <form
+                onSubmit={submitWithdrawal}
+                className="mt-4 space-y-3 rounded-lg border border-primary/20 bg-background-dark p-3"
+              >
+                <label className="block">
+                  <span className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+                    Amount (USD)
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={withdrawAmount}
+                    onChange={(event) => setWithdrawAmount(event.target.value)}
+                    className="w-full rounded-lg border border-border-dark bg-surface-darker px-3 py-2 text-sm text-white outline-none transition-colors focus:border-primary"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+                    Destination
+                  </span>
+                  <select
+                    value={selectedBank}
+                    onChange={(event) => setSelectedBank(event.target.value)}
+                    className="w-full rounded-lg border border-border-dark bg-surface-darker px-3 py-2 text-sm text-white outline-none transition-colors focus:border-primary"
+                  >
+                    <option value="">
+                      Primary ({primaryBank ? `${primaryBank.bankName} •••• ${primaryBank.last4}` : "None"})
+                    </option>
+                    {wallet.bankAccounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.bankName} •••• {account.last4}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="submit"
+                  disabled={withdrawMutation.isPending}
+                  className="w-full rounded-lg border border-primary/35 bg-primary/15 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/25 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {withdrawMutation.isPending ? "Processing..." : "Confirm Withdrawal"}
+                </button>
+              </form>
+            </section>
+          </div>
+        </>
+      ) : null}
 
       {linkedAccountOverlayOpen ? (
         <>

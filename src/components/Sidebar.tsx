@@ -1,5 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { useAuth } from "../app/AuthContext";
+import { useWallet } from "../hooks/useAppQueries";
+import { centsToUsd } from "../utils/format";
 
 const links = [
   { to: "/my-groups", label: "My Groups", icon: "groups" },
@@ -11,6 +13,12 @@ const links = [
 
 export function Sidebar() {
   const { user, signOut } = useAuth();
+  const walletQuery = useWallet();
+  const balanceLabel = walletQuery.data
+    ? centsToUsd(walletQuery.data.availableBalanceCents)
+    : walletQuery.isError
+      ? "Unavailable"
+      : "Loading...";
 
   return (
     <aside className="hidden h-screen w-64 flex-shrink-0 flex-col justify-between border-r border-primary/10 bg-background-dark lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 lg:flex">
@@ -44,8 +52,13 @@ export function Sidebar() {
       <div className="p-4">
         <div className="rounded-xl border border-primary/15 bg-surface-dark p-4">
           <p className="text-xs text-slate-400">Signed in as</p>
-          <p className="text-sm font-semibold text-white">{user?.firstName} {user?.lastName}</p>
-          <p className="text-xs text-slate-500">{user?.email}</p>
+          <p className="text-sm font-semibold text-white">
+            {user?.firstName} {user?.lastName}
+          </p>
+          <p className="mt-3 text-[11px] font-semibold tracking-[0.18em] text-slate-500">
+            YOUR BALANCE
+          </p>
+          <p className="mt-1 text-2xl font-bold text-white">{balanceLabel}</p>
         </div>
         <button
           type="button"
