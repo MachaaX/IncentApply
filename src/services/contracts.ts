@@ -5,6 +5,8 @@ import type {
   BankAccount,
   GmailSyncState,
   Group,
+  MyGroupSummary,
+  PendingGroupInvite,
   LeaderboardEntry,
   MemberProgress,
   PlatformConfig,
@@ -33,13 +35,31 @@ export interface AuthService {
 
 export interface GroupService {
   getCurrentGroup(): Promise<Group>;
+  getMyGroups(): Promise<MyGroupSummary[]>;
+  getGroupById(groupId: string): Promise<MyGroupSummary>;
+  createGroup(input: {
+    name: string;
+    applicationGoal: number;
+    stakeUsd: number;
+    goalCycle: "daily" | "weekly" | "biweekly";
+    inviteEmails: string[];
+  }): Promise<{ group: MyGroupSummary; invitesCreated: number }>;
+  checkUserExistsByEmail(email: string): Promise<boolean>;
+  updateGroupSettings(input: {
+    groupId: string;
+    applicationGoal: number;
+    stakeUsd: number;
+    goalCycle: "daily" | "weekly" | "biweekly";
+  }): Promise<MyGroupSummary>;
+  getPendingInvites(): Promise<PendingGroupInvite[]>;
+  respondToInvite(inviteId: string, action: "accept" | "reject"): Promise<MyGroupSummary | null>;
   getMembers(): Promise<User[]>;
   getMemberProgress(weekId: string): Promise<MemberProgress[]>;
   getLeaderboard(weekId: string): Promise<LeaderboardEntry[]>;
   getActivityFeed(): Promise<ActivityItem[]>;
   updateGoal(input: { weeklyGoal: number; adminGoalNote?: string }): Promise<Group>;
   updateGroupName(name: string): Promise<Group>;
-  joinWithInviteCode(inviteCode: string): Promise<Group>;
+  joinWithInviteCode(inviteCode: string): Promise<MyGroupSummary>;
 }
 
 export interface ApplicationService {

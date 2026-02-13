@@ -1,5 +1,8 @@
+import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { mockMyGroups, type MockGroupMember } from "../mocks/data/mockMyGroups";
+import { useMyGroupSummary, useUpdateGroupSettings } from "../hooks/useAppQueries";
+import type { GroupGoalCycle } from "../domain/types";
 import { centsToUsd } from "../utils/format";
 
 function initials(name: string): string {
@@ -89,16 +92,150 @@ function activityIconClass(tone: "success" | "warning" | "danger"): string {
 
 export function MyGroupPage() {
   const { groupId } = useParams<{ groupId: string }>();
-  const selectedGroup = mockMyGroups.find((group) => group.id === groupId) ?? mockMyGroups[0];
+  const groupSummaryQuery = useMyGroupSummary(groupId);
+  const updateGroupSettings = useUpdateGroupSettings();
 
-  if (!selectedGroup) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [goalCycle, setGoalCycle] = useState<GroupGoalCycle>("weekly");
+  const [applicationGoal, setApplicationGoal] = useState(20);
+  const [stakeUsd, setStakeUsd] = useState(15);
+  const [settingsStatus, setSettingsStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    const summary = groupSummaryQuery.data;
+    if (!summary) {
+      return;
+    }
+    setGoalCycle(summary.goalCycle);
+    setApplicationGoal(summary.applicationGoal);
+    setStakeUsd(summary.stakeUsd);
+  }, [groupSummaryQuery.data]);
+
+  if (groupSummaryQuery.isLoading) {
+    return <p className="text-sm text-slate-400">Loading group...</p>;
+  }
+
+  if (!groupSummaryQuery.data) {
+    if (groupSummaryQuery.error) {
+      return (
+        <p className="text-sm text-red-300">
+          {groupSummaryQuery.error instanceof Error
+            ? groupSummaryQuery.error.message
+            : "Unable to load group."}
+        </p>
+      );
+    }
     return <p className="text-sm text-slate-400">No groups available.</p>;
   }
 
+  const summary = groupSummaryQuery.data;
+  const isAdmin = summary.myRole === "admin";
+  const baseGroup = mockMyGroups[0];
+  const selectedGroup = {
+    ...baseGroup,
+    id: summary.id,
+    name: summary.name
+  };
   const goalPercent = Math.round((selectedGroup.goalCompleted / selectedGroup.goalTarget) * 100);
+
+  const saveSettings = async () => {
+    if (!groupId || !isAdmin) {
+      return;
+    }
+    setSettingsStatus(null);
+    try {
+      await updateGroupSettings.mutateAsync({
+        groupId,
+        goalCycle,
+        applicationGoal,
+        stakeUsd
+      });
+      setSettingsStatus("Group settings saved.");
+    } catch (reason) {
+      setSettingsStatus(reason instanceof Error ? reason.message : "Unable to save settings.");
+    }
+  };
 
   return (
     <div className="space-y-8">
+      <section className="rounded-2xl border border-primary/10 bg-[#162e25] p-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-3xl font-black text-white">{summary.name}</h1>
+            <p className="mt-1 text-sm text-[#92c9b7]">
+              Cycle: <span className="capitalize">{summary.goalCycle}</span> · Application Goal:{" "}
+              {summary.applicationGoal} · Stake: {centsToUsd(summary.stakeUsd * 100)}
+            </p>
+          </div>
+          {isAdmin ? (
+            <button
+              type="button"
+              onClick={() => setSettingsOpen((open) => !open)}
+              className="inline-flex items-center gap-1.5 self-start rounded-lg border border-primary/30 bg-primary/10 px-4 py-2 text-sm font-bold text-primary transition-colors hover:bg-primary/20"
+            >
+              <span className="material-icons text-base">tune</span>
+              Group Settings
+            </button>
+          ) : null}
+        </div>
+
+        {isAdmin && settingsOpen ? (
+          <div className="mt-4 space-y-4 rounded-xl border border-primary/20 bg-background-dark/40 p-4">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="space-y-1 text-sm">
+                <span className="block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Goal Cycle
+                </span>
+                <select
+                  value={goalCycle}
+                  onChange={(event) => setGoalCycle(event.target.value as GroupGoalCycle)}
+                  className="w-full rounded-lg border border-border-dark bg-background-dark px-3 py-2 text-white focus:border-primary focus:outline-none"
+                >
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="biweekly">Biweekly</option>
+                </select>
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Application Goal
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  value={applicationGoal}
+                  onChange={(event) => setApplicationGoal(Number(event.target.value))}
+                  className="w-full rounded-lg border border-border-dark bg-background-dark px-3 py-2 text-white focus:border-primary focus:outline-none"
+                />
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Stake (USD)
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  value={stakeUsd}
+                  onChange={(event) => setStakeUsd(Number(event.target.value))}
+                  className="w-full rounded-lg border border-border-dark bg-background-dark px-3 py-2 text-white focus:border-primary focus:outline-none"
+                />
+              </label>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void saveSettings()}
+                disabled={updateGroupSettings.isPending}
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-bold text-background-dark disabled:opacity-70"
+              >
+                {updateGroupSettings.isPending ? "Saving..." : "Save Settings"}
+              </button>
+              {settingsStatus ? <p className="text-sm text-[#92c9b7]">{settingsStatus}</p> : null}
+            </div>
+          </div>
+        ) : null}
+      </section>
+
       <section className="grid gap-4 md:grid-cols-3">
         <article className="relative overflow-hidden rounded-2xl border border-primary/10 bg-[#162e25] p-6">
           <div className="absolute -right-6 -top-6 h-32 w-32 rounded-full bg-primary/10 blur-3xl" />
@@ -257,7 +394,9 @@ export function MyGroupPage() {
                     <td className="p-5 text-right font-mono text-2xl font-bold text-white">
                       <p>
                         {String(member.appsSent).padStart(2, "0")}
-                        <span className="ml-1 text-xs font-normal font-sans text-slate-500">/ {member.goal}</span>
+                        <span className="ml-1 text-xs font-normal font-sans text-slate-500">
+                          / {member.goal}
+                        </span>
                       </p>
                     </td>
                     <td className="p-5">
@@ -291,9 +430,14 @@ export function MyGroupPage() {
         </h3>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {selectedGroup.activity.map((item) => (
-            <article key={item.id} className="flex items-center gap-3 rounded-xl border border-primary/5 bg-[#162e25] p-4">
+            <article
+              key={item.id}
+              className="flex items-center gap-3 rounded-xl border border-primary/5 bg-[#162e25] p-4"
+            >
               <div className="flex items-start gap-3">
-                <span className={`inline-flex h-8 w-8 items-center justify-center rounded-full ${activityIconClass(item.tone)}`}>
+                <span
+                  className={`inline-flex h-8 w-8 items-center justify-center rounded-full ${activityIconClass(item.tone)}`}
+                >
                   <span className="material-icons text-sm">{activityIcon(item.tone)}</span>
                 </span>
                 <div>

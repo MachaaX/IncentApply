@@ -54,6 +54,40 @@ export interface Group {
   rules: GroupRules;
 }
 
+export type GroupGoalCycle = "daily" | "weekly" | "biweekly";
+export type GroupMemberRole = "admin" | "member";
+
+export interface MyGroupSummary {
+  id: string;
+  name: string;
+  applicationGoal: number;
+  stakeUsd: number;
+  goalCycle: GroupGoalCycle;
+  myRole: GroupMemberRole;
+  weeklyGoal: number;
+  weeklyStakeUsd: number;
+  ownerUserId: string;
+  ownerName: string;
+  inviteCode: string;
+  inviteCodeExpiresAt: string;
+  createdAt: string;
+}
+
+export interface PendingGroupInvite {
+  id: string;
+  groupId: string;
+  groupName: string;
+  invitedBy: string;
+  goalCycle: GroupGoalCycle;
+  applicationGoal: number;
+  stakeUsd: number;
+  goalApps: number;
+  weeklyStakeUsd: number;
+  inviteCode: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
 export interface MemberProgress {
   userId: string;
   weekId: string;

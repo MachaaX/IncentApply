@@ -17,6 +17,23 @@ export function useCurrentGroup() {
   });
 }
 
+export function useMyGroupsList() {
+  const { groupService } = useServices();
+  return useQuery({
+    queryKey: ["my-groups-list"],
+    queryFn: () => groupService.getMyGroups()
+  });
+}
+
+export function useMyGroupSummary(groupId?: string) {
+  const { groupService } = useServices();
+  return useQuery({
+    enabled: Boolean(groupId),
+    queryKey: ["my-group-summary", groupId],
+    queryFn: () => groupService.getGroupById(groupId ?? "")
+  });
+}
+
 export function useMembers() {
   const { groupService } = useServices();
   return useQuery({
@@ -172,6 +189,75 @@ export function useJoinGroup() {
   return useMutation({
     mutationFn: (inviteCode: string) => groupService.joinWithInviteCode(inviteCode),
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["group"] });
+      void queryClient.invalidateQueries({ queryKey: ["members"] });
+      void queryClient.invalidateQueries({ queryKey: ["my-groups-list"] });
+      void queryClient.invalidateQueries({ queryKey: ["pending-invites"] });
+    }
+  });
+}
+
+export function useCreateGroup() {
+  const { groupService } = useServices();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      name: string;
+      applicationGoal: number;
+      stakeUsd: number;
+      goalCycle: "daily" | "weekly" | "biweekly";
+      inviteEmails: string[];
+    }) => groupService.createGroup(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["my-groups-list"] });
+      void queryClient.invalidateQueries({ queryKey: ["group"] });
+      void queryClient.invalidateQueries({ queryKey: ["pending-invites"] });
+    }
+  });
+}
+
+export function usePendingInvites() {
+  const { groupService } = useServices();
+  return useQuery({
+    queryKey: ["pending-invites"],
+    queryFn: () => groupService.getPendingInvites()
+  });
+}
+
+export function useCheckUserExistsByEmail() {
+  const { groupService } = useServices();
+  return useMutation({
+    mutationFn: (email: string) => groupService.checkUserExistsByEmail(email)
+  });
+}
+
+export function useUpdateGroupSettings() {
+  const { groupService } = useServices();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      groupId: string;
+      applicationGoal: number;
+      stakeUsd: number;
+      goalCycle: "daily" | "weekly" | "biweekly";
+    }) => groupService.updateGroupSettings(input),
+    onSuccess: (_, input) => {
+      void queryClient.invalidateQueries({ queryKey: ["my-group-summary", input.groupId] });
+      void queryClient.invalidateQueries({ queryKey: ["my-groups-list"] });
+      void queryClient.invalidateQueries({ queryKey: ["pending-invites"] });
+    }
+  });
+}
+
+export function useRespondToInvite() {
+  const { groupService } = useServices();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { inviteId: string; action: "accept" | "reject" }) =>
+      groupService.respondToInvite(input.inviteId, input.action),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["pending-invites"] });
+      void queryClient.invalidateQueries({ queryKey: ["my-groups-list"] });
       void queryClient.invalidateQueries({ queryKey: ["group"] });
       void queryClient.invalidateQueries({ queryKey: ["members"] });
     }

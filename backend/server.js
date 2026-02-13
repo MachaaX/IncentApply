@@ -52,6 +52,10 @@ const ENTRA_CLIENT_SECRET = process.env.ENTRA_CLIENT_SECRET;
 const ENTRA_REDIRECT_URI = process.env.ENTRA_REDIRECT_URI;
 const ENTRA_DISCOVERY_URL = process.env.ENTRA_DISCOVERY_URL;
 const ENTRA_SCOPES = process.env.ENTRA_SCOPES ?? "openid profile email";
+const GROUP_NAME_MAX_LENGTH = 30;
+const INVITE_EXPIRY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_GOAL_CYCLE = "weekly";
+const ALLOWED_GOAL_CYCLES = new Set(["daily", "weekly", "biweekly"]);
 const entraConfiguredExplicitly = Boolean(
   ENTRA_CLIENT_ID || ENTRA_CLIENT_SECRET || ENTRA_REDIRECT_URI || ENTRA_DISCOVERY_URL
 );
@@ -322,6 +326,64 @@ async function initDb() {
       await pool.query("ALTER TABLE users ADD COLUMN entra_sub VARCHAR(191) UNIQUE NULL");
     }
 
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS groups (
+        id VARCHAR(191) PRIMARY KEY,
+        name VARCHAR(${GROUP_NAME_MAX_LENGTH}) NOT NULL,
+        owner_user_id VARCHAR(191) NOT NULL,
+        weekly_goal INT NOT NULL,
+        weekly_stake_usd INT NOT NULL,
+        goal_cycle VARCHAR(16) NOT NULL DEFAULT '${DEFAULT_GOAL_CYCLE}',
+        invite_code VARCHAR(64) NOT NULL UNIQUE,
+        invite_code_expires_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT fk_groups_owner FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS group_members (
+        group_id VARCHAR(191) NOT NULL,
+        user_id VARCHAR(191) NOT NULL,
+        role VARCHAR(32) NOT NULL DEFAULT 'member',
+        joined_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (group_id, user_id),
+        CONSTRAINT fk_group_members_group FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+        CONSTRAINT fk_group_members_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS group_invites (
+        id VARCHAR(191) PRIMARY KEY,
+        group_id VARCHAR(191) NOT NULL,
+        recipient_email VARCHAR(320) NOT NULL,
+        sent_by_user_id VARCHAR(191) NOT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        expires_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        responded_at TIMESTAMP NULL DEFAULT NULL,
+        CONSTRAINT fk_group_invites_group FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+        CONSTRAINT fk_group_invites_sender FOREIGN KEY (sent_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    const goalCycleColumn = await pool.query(`
+      SELECT COUNT(*) AS count
+      FROM information_schema.columns
+      WHERE table_schema = DATABASE()
+        AND table_name = 'groups'
+        AND column_name = 'goal_cycle'
+    `);
+
+    if (Number(goalCycleColumn.rows[0]?.count ?? 0) === 0) {
+      await pool.query(
+        `ALTER TABLE groups ADD COLUMN goal_cycle VARCHAR(16) NOT NULL DEFAULT '${DEFAULT_GOAL_CYCLE}'`
+      );
+    }
+
     return;
   }
 
@@ -355,6 +417,60 @@ async function initDb() {
     CREATE UNIQUE INDEX IF NOT EXISTS users_entra_sub_idx
     ON users(entra_sub);
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS groups (
+      id TEXT PRIMARY KEY,
+      name VARCHAR(${GROUP_NAME_MAX_LENGTH}) NOT NULL,
+      owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      weekly_goal INT NOT NULL,
+      weekly_stake_usd INT NOT NULL,
+      goal_cycle TEXT NOT NULL DEFAULT '${DEFAULT_GOAL_CYCLE}',
+      invite_code TEXT NOT NULL UNIQUE,
+      invite_code_expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    ALTER TABLE groups
+    ADD COLUMN IF NOT EXISTS goal_cycle TEXT NOT NULL DEFAULT '${DEFAULT_GOAL_CYCLE}';
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS group_members (
+      group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL DEFAULT 'member',
+      joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (group_id, user_id)
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS group_invites (
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+      recipient_email TEXT NOT NULL,
+      sent_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'pending',
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      responded_at TIMESTAMPTZ
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS group_members_user_idx
+    ON group_members(user_id);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS group_invites_recipient_status_idx
+    ON group_invites(recipient_email, status);
+  `);
 }
 
 function isValidEmail(email) {
@@ -363,6 +479,13 @@ function isValidEmail(email) {
 
 function normalizeEmail(email) {
   return email.trim().toLowerCase();
+}
+
+function normalizeGoalCycle(value) {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  return ALLOWED_GOAL_CYCLES.has(normalized) ? normalized : DEFAULT_GOAL_CYCLE;
 }
 
 function buildAuthResponse(user) {
@@ -415,6 +538,208 @@ async function getUserByGoogleSub(googleSub) {
 async function getUserByEntraSub(entraSub) {
   const result = await pool.query("SELECT * FROM users WHERE entra_sub = $1", [entraSub]);
   return result.rows[0] ?? null;
+}
+
+function asIsoTimestamp(value) {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
+  }
+
+  if (typeof value === "number") {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+  }
+
+  return new Date().toISOString();
+}
+
+function nowPlusInviteExpiryIso() {
+  return new Date(Date.now() + INVITE_EXPIRY_MS).toISOString();
+}
+
+function resolveOwnerDisplayName(row) {
+  const firstName = (row.owner_first_name ?? row.first_name ?? "").toString().trim();
+  const lastName = (row.owner_last_name ?? row.last_name ?? "").toString().trim();
+  const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
+  return fullName || row.owner_email || row.email || "Group Owner";
+}
+
+function toGroupSummary(row) {
+  const applicationGoal = Number(row.weekly_goal ?? 0);
+  const stakeUsd = Number(row.weekly_stake_usd ?? 0);
+  const goalCycle = normalizeGoalCycle(row.goal_cycle);
+  const normalizedRole = String(row.my_role ?? "").toLowerCase();
+  const myRole = normalizedRole === "admin" || normalizedRole === "owner" ? "admin" : "member";
+
+  return {
+    id: row.id,
+    name: row.name,
+    applicationGoal,
+    stakeUsd,
+    goalCycle,
+    myRole,
+    // Backward-compatible fields used in existing frontend code.
+    weeklyGoal: applicationGoal,
+    weeklyStakeUsd: stakeUsd,
+    ownerUserId: row.owner_user_id,
+    ownerName: resolveOwnerDisplayName(row),
+    inviteCode: row.invite_code,
+    inviteCodeExpiresAt: asIsoTimestamp(row.invite_code_expires_at),
+    createdAt: asIsoTimestamp(row.created_at)
+  };
+}
+
+function toInviteView(row) {
+  return {
+    id: row.id,
+    groupId: row.group_id,
+    groupName: row.group_name ?? row.name,
+    invitedBy: resolveOwnerDisplayName(row),
+    goalCycle: normalizeGoalCycle(row.goal_cycle),
+    applicationGoal: Number(row.weekly_goal ?? 0),
+    stakeUsd: Number(row.weekly_stake_usd ?? 0),
+    // Backward-compatible fields used in existing frontend code.
+    goalApps: Number(row.weekly_goal ?? 0),
+    weeklyStakeUsd: Number(row.weekly_stake_usd ?? 0),
+    inviteCode: row.invite_code,
+    expiresAt: asIsoTimestamp(row.expires_at),
+    createdAt: asIsoTimestamp(row.created_at)
+  };
+}
+
+function normalizeInviteEmails(value, currentUserEmail) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const unique = new Set();
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const normalized = normalizeEmail(entry);
+    if (!normalized || normalized === currentUserEmail) {
+      continue;
+    }
+    if (isValidEmail(normalized)) {
+      unique.add(normalized);
+    }
+  }
+
+  return [...unique];
+}
+
+async function createUniqueInviteCode() {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const candidate = `SQ-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+    const existing = await pool.query("SELECT id FROM groups WHERE invite_code = $1 LIMIT 1", [
+      candidate
+    ]);
+    if (!existing.rows.length) {
+      return candidate;
+    }
+  }
+
+  throw new Error("Unable to generate a unique invite code.");
+}
+
+async function ensureGroupMembership(groupId, userId, role = "member") {
+  const existing = await pool.query(
+    `
+      SELECT 1
+      FROM group_members
+      WHERE group_id = $1
+        AND user_id = $2
+      LIMIT 1
+    `,
+    [groupId, userId]
+  );
+
+  if (existing.rows.length) {
+    return;
+  }
+
+  await pool.query(
+    `
+      INSERT INTO group_members (group_id, user_id, role)
+      VALUES ($1, $2, $3)
+    `,
+    [groupId, userId, role]
+  );
+}
+
+async function getGroupByIdForMember(groupId, userId) {
+  const result = await pool.query(
+    `
+      SELECT
+        g.*,
+        gm.role AS my_role,
+        owner.first_name AS owner_first_name,
+        owner.last_name AS owner_last_name,
+        owner.email AS owner_email
+      FROM groups g
+      INNER JOIN group_members gm
+        ON gm.group_id = g.id
+      LEFT JOIN users owner
+        ON owner.id = g.owner_user_id
+      WHERE g.id = $1
+        AND gm.user_id = $2
+      LIMIT 1
+    `,
+    [groupId, userId]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function listGroupsForUser(userId) {
+  const result = await pool.query(
+    `
+      SELECT
+        g.*,
+        gm.role AS my_role,
+        owner.first_name AS owner_first_name,
+        owner.last_name AS owner_last_name,
+        owner.email AS owner_email
+      FROM groups g
+      INNER JOIN group_members gm
+        ON gm.group_id = g.id
+      LEFT JOIN users owner
+        ON owner.id = g.owner_user_id
+      WHERE gm.user_id = $1
+      ORDER BY g.created_at DESC
+    `,
+    [userId]
+  );
+
+  return result.rows.map((row) => toGroupSummary(row));
+}
+
+async function getGroupMemberRole(groupId, userId) {
+  const result = await pool.query(
+    `
+      SELECT role
+      FROM group_members
+      WHERE group_id = $1
+        AND user_id = $2
+      LIMIT 1
+    `,
+    [groupId, userId]
+  );
+
+  const role = String(result.rows[0]?.role ?? "").toLowerCase();
+  if (role === "admin" || role === "owner") {
+    return "admin";
+  }
+  if (role === "member") {
+    return "member";
+  }
+  return null;
 }
 
 async function createEmailUser({ email, password, firstName, lastName }) {
@@ -1442,6 +1767,474 @@ app.get("/api/auth/me", authMiddleware, async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to fetch profile." });
+  }
+});
+
+app.get("/api/users/exists", authMiddleware, async (req, res) => {
+  try {
+    const emailRaw = typeof req.query.email === "string" ? req.query.email : "";
+    const normalizedEmail = normalizeEmail(emailRaw);
+
+    if (!normalizedEmail || !isValidEmail(normalizedEmail)) {
+      return res.status(400).json({ error: "A valid email query parameter is required." });
+    }
+
+    const existingUser = await getUserByEmail(normalizedEmail);
+    return res.status(200).json({ exists: Boolean(existingUser) });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to check user existence."
+    });
+  }
+});
+
+app.get("/api/groups", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    if (!userId) {
+      return res.status(401).json({ error: "Missing user identity." });
+    }
+
+    const groups = await listGroupsForUser(userId);
+    return res.status(200).json({ groups });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to fetch groups."
+    });
+  }
+});
+
+app.post("/api/groups", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    const user = userId ? await getUserById(userId) : null;
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const { name, applicationGoal, weeklyGoal, stakeUsd, weeklyStakeUsd, goalCycle, inviteEmails } =
+      req.body ?? {};
+    const normalizedName = typeof name === "string" ? name.trim() : "";
+    if (!normalizedName) {
+      return res.status(400).json({ error: "Group name is required." });
+    }
+    if (normalizedName.length > GROUP_NAME_MAX_LENGTH) {
+      return res.status(400).json({
+        error: `Group name must be ${GROUP_NAME_MAX_LENGTH} characters or fewer.`
+      });
+    }
+
+    const parsedGoal = Number(applicationGoal ?? weeklyGoal);
+    if (!Number.isFinite(parsedGoal) || parsedGoal < 1) {
+      return res.status(400).json({ error: "Application goal must be at least 1." });
+    }
+
+    const parsedStake = Number(stakeUsd ?? weeklyStakeUsd);
+    if (!Number.isFinite(parsedStake) || parsedStake < 0) {
+      return res.status(400).json({ error: "Stake must be zero or greater." });
+    }
+    const normalizedCycle = normalizeGoalCycle(goalCycle);
+
+    const recipients = normalizeInviteEmails(inviteEmails, user.email);
+    const missingRecipients = [];
+    for (const recipientEmail of recipients) {
+      const recipientUser = await getUserByEmail(recipientEmail);
+      if (!recipientUser) {
+        missingRecipients.push(recipientEmail);
+      }
+    }
+
+    if (missingRecipients.length) {
+      return res.status(400).json({
+        error: `These users do not exist: ${missingRecipients.join(
+          ", "
+        )}. Ask them to sign up first or share the invite code instead.`
+      });
+    }
+
+    const expiresAt = nowPlusInviteExpiryIso();
+    const inviteCode = await createUniqueInviteCode();
+    const groupId = randomUUID();
+
+    await pool.query(
+      `
+        INSERT INTO groups (
+          id,
+          name,
+          owner_user_id,
+          weekly_goal,
+          weekly_stake_usd,
+          goal_cycle,
+          invite_code,
+          invite_code_expires_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `,
+      [
+        groupId,
+        normalizedName,
+        user.id,
+        Math.round(parsedGoal),
+        Math.round(parsedStake),
+        normalizedCycle,
+        inviteCode,
+        expiresAt
+      ]
+    );
+
+    await ensureGroupMembership(groupId, user.id, "admin");
+
+    for (const recipientEmail of recipients) {
+      await pool.query(
+        `
+          INSERT INTO group_invites (
+            id,
+            group_id,
+            recipient_email,
+            sent_by_user_id,
+            status,
+            expires_at
+          )
+          VALUES ($1, $2, $3, $4, 'pending', $5)
+        `,
+        [randomUUID(), groupId, recipientEmail, user.id, expiresAt]
+      );
+    }
+
+    const createdGroup = await getGroupByIdForMember(groupId, user.id);
+    if (!createdGroup) {
+      return res.status(500).json({ error: "Unable to load created group." });
+    }
+
+    return res.status(201).json({
+      group: toGroupSummary(createdGroup),
+      invitesCreated: recipients.length
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to create group."
+    });
+  }
+});
+
+app.post("/api/groups/join-code", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    const user = userId ? await getUserById(userId) : null;
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const inviteCode = typeof req.body?.inviteCode === "string" ? req.body.inviteCode.trim() : "";
+    if (!inviteCode) {
+      return res.status(400).json({ error: "Invite code is required." });
+    }
+
+    const groupResult = await pool.query(
+      `
+        SELECT
+          g.*,
+          owner.first_name AS owner_first_name,
+          owner.last_name AS owner_last_name,
+          owner.email AS owner_email
+        FROM groups g
+        LEFT JOIN users owner
+          ON owner.id = g.owner_user_id
+        WHERE LOWER(g.invite_code) = LOWER($1)
+        LIMIT 1
+      `,
+      [inviteCode]
+    );
+
+    const group = groupResult.rows[0] ?? null;
+    if (!group) {
+      return res.status(404).json({ error: "Invalid invite code." });
+    }
+
+    if (new Date(group.invite_code_expires_at).getTime() <= Date.now()) {
+      return res.status(410).json({ error: "This invite code has expired." });
+    }
+
+    await ensureGroupMembership(group.id, user.id);
+    await pool.query(
+      `
+        UPDATE group_invites
+        SET status = 'accepted',
+            responded_at = NOW(),
+            updated_at = NOW()
+        WHERE group_id = $1
+          AND recipient_email = $2
+          AND status = 'pending'
+          AND expires_at > NOW()
+      `,
+      [group.id, normalizeEmail(user.email)]
+    );
+
+    const joinedGroup = await getGroupByIdForMember(group.id, user.id);
+    if (!joinedGroup) {
+      return res.status(500).json({ error: "Unable to load joined group." });
+    }
+
+    return res.status(200).json({ group: toGroupSummary(joinedGroup) });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to join group."
+    });
+  }
+});
+
+app.get("/api/groups/invites/pending", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    const user = userId ? await getUserById(userId) : null;
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const result = await pool.query(
+      `
+        SELECT
+          gi.*,
+          g.name AS group_name,
+          g.weekly_goal,
+          g.weekly_stake_usd,
+          g.goal_cycle,
+          g.invite_code,
+          g.invite_code_expires_at,
+          owner.first_name AS owner_first_name,
+          owner.last_name AS owner_last_name,
+          owner.email AS owner_email
+        FROM group_invites gi
+        INNER JOIN groups g
+          ON g.id = gi.group_id
+        LEFT JOIN users owner
+          ON owner.id = g.owner_user_id
+        WHERE gi.recipient_email = $1
+          AND gi.status = 'pending'
+          AND gi.expires_at > NOW()
+          AND g.invite_code_expires_at > NOW()
+        ORDER BY gi.created_at DESC
+      `,
+      [normalizeEmail(user.email)]
+    );
+
+    return res.status(200).json({ invites: result.rows.map((row) => toInviteView(row)) });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to fetch pending invites."
+    });
+  }
+});
+
+app.post("/api/groups/invites/:inviteId/accept", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    const user = userId ? await getUserById(userId) : null;
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const inviteId = String(req.params.inviteId ?? "").trim();
+    if (!inviteId) {
+      return res.status(400).json({ error: "Invite id is required." });
+    }
+
+    const inviteResult = await pool.query(
+      `
+        SELECT
+          gi.*,
+          g.name AS group_name,
+          g.weekly_goal,
+          g.weekly_stake_usd,
+          g.invite_code,
+          g.invite_code_expires_at
+        FROM group_invites gi
+        INNER JOIN groups g
+          ON g.id = gi.group_id
+        WHERE gi.id = $1
+          AND gi.recipient_email = $2
+        LIMIT 1
+      `,
+      [inviteId, normalizeEmail(user.email)]
+    );
+
+    const invite = inviteResult.rows[0] ?? null;
+    if (!invite) {
+      return res.status(404).json({ error: "Invite not found." });
+    }
+
+    if (invite.status !== "pending") {
+      return res.status(400).json({ error: "Invite has already been handled." });
+    }
+
+    const expired =
+      new Date(invite.expires_at).getTime() <= Date.now() ||
+      new Date(invite.invite_code_expires_at).getTime() <= Date.now();
+    if (expired) {
+      return res.status(410).json({ error: "Invite has expired." });
+    }
+
+    await ensureGroupMembership(invite.group_id, user.id);
+    await pool.query(
+      `
+        UPDATE group_invites
+        SET status = 'accepted',
+            responded_at = NOW(),
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+      [inviteId]
+    );
+
+    const joinedGroup = await getGroupByIdForMember(invite.group_id, user.id);
+    if (!joinedGroup) {
+      return res.status(500).json({ error: "Unable to load joined group." });
+    }
+
+    return res.status(200).json({ group: toGroupSummary(joinedGroup) });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to accept invite."
+    });
+  }
+});
+
+app.post("/api/groups/invites/:inviteId/reject", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    const user = userId ? await getUserById(userId) : null;
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const inviteId = String(req.params.inviteId ?? "").trim();
+    if (!inviteId) {
+      return res.status(400).json({ error: "Invite id is required." });
+    }
+
+    const inviteResult = await pool.query(
+      `
+        SELECT id, status, expires_at
+        FROM group_invites
+        WHERE id = $1
+          AND recipient_email = $2
+        LIMIT 1
+      `,
+      [inviteId, normalizeEmail(user.email)]
+    );
+
+    const invite = inviteResult.rows[0] ?? null;
+    if (!invite) {
+      return res.status(404).json({ error: "Invite not found." });
+    }
+
+    if (invite.status !== "pending") {
+      return res.status(400).json({ error: "Invite has already been handled." });
+    }
+
+    if (new Date(invite.expires_at).getTime() <= Date.now()) {
+      return res.status(410).json({ error: "Invite has expired." });
+    }
+
+    await pool.query(
+      `
+        UPDATE group_invites
+        SET status = 'rejected',
+            responded_at = NOW(),
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+      [inviteId]
+    );
+
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to reject invite."
+    });
+  }
+});
+
+app.patch("/api/groups/:groupId/settings", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    if (!userId) {
+      return res.status(401).json({ error: "Missing user identity." });
+    }
+
+    const groupId = String(req.params.groupId ?? "").trim();
+    if (!groupId) {
+      return res.status(400).json({ error: "Group id is required." });
+    }
+
+    const role = await getGroupMemberRole(groupId, userId);
+    if (!role) {
+      return res.status(404).json({ error: "Group not found." });
+    }
+    if (role !== "admin") {
+      return res.status(403).json({ error: "Only admins can update group settings." });
+    }
+
+    const { applicationGoal, weeklyGoal, stakeUsd, weeklyStakeUsd, goalCycle } = req.body ?? {};
+    const parsedGoal = Number(applicationGoal ?? weeklyGoal);
+    if (!Number.isFinite(parsedGoal) || parsedGoal < 1) {
+      return res.status(400).json({ error: "Application goal must be at least 1." });
+    }
+
+    const parsedStake = Number(stakeUsd ?? weeklyStakeUsd);
+    if (!Number.isFinite(parsedStake) || parsedStake < 0) {
+      return res.status(400).json({ error: "Stake must be zero or greater." });
+    }
+
+    const normalizedCycle = normalizeGoalCycle(goalCycle);
+
+    await pool.query(
+      `
+        UPDATE groups
+        SET weekly_goal = $2,
+            weekly_stake_usd = $3,
+            goal_cycle = $4,
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+      [groupId, Math.round(parsedGoal), Math.round(parsedStake), normalizedCycle]
+    );
+
+    const updated = await getGroupByIdForMember(groupId, userId);
+    if (!updated) {
+      return res.status(404).json({ error: "Group not found." });
+    }
+
+    return res.status(200).json({ group: toGroupSummary(updated) });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to update group settings."
+    });
+  }
+});
+
+app.get("/api/groups/:groupId", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    if (!userId) {
+      return res.status(401).json({ error: "Missing user identity." });
+    }
+
+    const groupId = String(req.params.groupId ?? "").trim();
+    if (!groupId) {
+      return res.status(400).json({ error: "Group id is required." });
+    }
+
+    const group = await getGroupByIdForMember(groupId, userId);
+    if (!group) {
+      return res.status(404).json({ error: "Group not found." });
+    }
+
+    return res.status(200).json({ group: toGroupSummary(group) });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to fetch group."
+    });
   }
 });
 

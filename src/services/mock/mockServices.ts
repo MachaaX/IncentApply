@@ -4,6 +4,8 @@ import type {
   AuthSession,
   BankAccount,
   Group,
+  MyGroupSummary,
+  PendingGroupInvite,
   LeaderboardEntry,
   MemberProgress,
   SettlementCycle,
@@ -46,6 +48,62 @@ interface BackendAuthResponse {
   user: BackendUserProfile;
 }
 
+interface BackendGroupSummary {
+  id: string;
+  name: string;
+  applicationGoal: number;
+  stakeUsd: number;
+  goalCycle: "daily" | "weekly" | "biweekly";
+  myRole: "admin" | "member";
+  weeklyGoal: number;
+  weeklyStakeUsd: number;
+  ownerUserId: string;
+  ownerName: string;
+  inviteCode: string;
+  inviteCodeExpiresAt: string;
+  createdAt: string;
+}
+
+interface BackendGroupListResponse {
+  groups: BackendGroupSummary[];
+}
+
+interface BackendGroupResponse {
+  group: BackendGroupSummary;
+}
+
+interface BackendCreateGroupResponse {
+  group: BackendGroupSummary;
+  invitesCreated: number;
+}
+
+interface BackendPendingInvite {
+  id: string;
+  groupId: string;
+  groupName: string;
+  invitedBy: string;
+  goalCycle: "daily" | "weekly" | "biweekly";
+  applicationGoal: number;
+  stakeUsd: number;
+  goalApps: number;
+  weeklyStakeUsd: number;
+  inviteCode: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
+interface BackendPendingInvitesResponse {
+  invites: BackendPendingInvite[];
+}
+
+interface BackendInviteRejectResponse {
+  ok: boolean;
+}
+
+interface BackendUserExistsResponse {
+  exists: boolean;
+}
+
 class BackendUnavailableError extends Error {}
 
 const configuredStrategy = (import.meta.env.VITE_AUTH_STRATEGY as string | undefined)?.toLowerCase();
@@ -71,6 +129,47 @@ const backendAuthBaseUrl = configuredBackendAuthBaseUrl
 
 function buildBackendUrl(path: string): string {
   return backendAuthBaseUrl ? `${backendAuthBaseUrl}${path}` : path;
+}
+
+function mapBackendGroupSummary(entry: BackendGroupSummary): MyGroupSummary {
+  const applicationGoal = Number(entry.applicationGoal ?? entry.weeklyGoal);
+  const stakeUsd = Number(entry.stakeUsd ?? entry.weeklyStakeUsd);
+
+  return {
+    id: entry.id,
+    name: entry.name,
+    applicationGoal,
+    stakeUsd,
+    goalCycle: entry.goalCycle ?? "weekly",
+    myRole: entry.myRole ?? "member",
+    weeklyGoal: applicationGoal,
+    weeklyStakeUsd: stakeUsd,
+    ownerUserId: entry.ownerUserId,
+    ownerName: entry.ownerName,
+    inviteCode: entry.inviteCode,
+    inviteCodeExpiresAt: entry.inviteCodeExpiresAt,
+    createdAt: entry.createdAt
+  };
+}
+
+function mapBackendPendingInvite(entry: BackendPendingInvite): PendingGroupInvite {
+  const applicationGoal = Number(entry.applicationGoal ?? entry.goalApps);
+  const stakeUsd = Number(entry.stakeUsd ?? entry.weeklyStakeUsd);
+
+  return {
+    id: entry.id,
+    groupId: entry.groupId,
+    groupName: entry.groupName,
+    invitedBy: entry.invitedBy,
+    goalCycle: entry.goalCycle ?? "weekly",
+    applicationGoal,
+    stakeUsd,
+    goalApps: applicationGoal,
+    weeklyStakeUsd: stakeUsd,
+    inviteCode: entry.inviteCode,
+    expiresAt: entry.expiresAt,
+    createdAt: entry.createdAt
+  };
 }
 
 function withLatency<T>(value: T): Promise<T> {
@@ -131,6 +230,10 @@ function throwIfMissing<T>(value: T | undefined | null, message: string): T {
 
 function shouldFallbackToMock(error: unknown): boolean {
   return authStrategy === "hybrid" && error instanceof BackendUnavailableError;
+}
+
+function isNotFoundResponse(error: unknown): boolean {
+  return error instanceof Error && /status\s*404|not found/i.test(error.message);
 }
 
 function defaultNamesFromEmail(email: string): { firstName: string; lastName: string } {
@@ -318,15 +421,20 @@ async function backendRequest<T>(path: string, init?: RequestInit): Promise<T> {
 
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 6000);
+  const headers = new Headers(init?.headers ?? {});
+  if (!headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  const token = getStoredBackendToken();
+  if (token && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
 
   try {
     const response = await fetch(buildBackendUrl(path), {
       ...init,
       signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        ...(init?.headers ?? {})
-      }
+      headers
     });
 
     const payload =
@@ -384,6 +492,27 @@ function getCurrentUserRecord(): User {
 
 function getGroup(): Group {
   return getState().group;
+}
+
+function localGroupToSummary(group: Group): MyGroupSummary {
+  const owner = getState().users.find((entry) => entry.id === group.ownerUserId);
+  const ownerName = owner ? `${owner.firstName} ${owner.lastName}`.trim() : "Group Owner";
+
+  return {
+    id: group.id,
+    name: group.name,
+    applicationGoal: group.weeklyGoal,
+    stakeUsd: (group.rules.baseStakeCents + group.rules.goalLockedStakeCents) / 100,
+    goalCycle: "weekly",
+    myRole: "admin",
+    weeklyGoal: group.weeklyGoal,
+    weeklyStakeUsd: (group.rules.baseStakeCents + group.rules.goalLockedStakeCents) / 100,
+    ownerUserId: group.ownerUserId,
+    ownerName,
+    inviteCode: group.inviteCode,
+    inviteCodeExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    createdAt: new Date().toISOString()
+  };
 }
 
 function belongsToWeek(log: ApplicationLog, weekId: string, timezone: string): boolean {
@@ -707,7 +836,262 @@ const authService: AuthService = {
 
 const groupService: GroupService = {
   async getCurrentGroup() {
-    return withLatency(getGroup());
+    if (!backendAuthEnabled()) {
+      return withLatency(getGroup());
+    }
+
+    try {
+      const payload = await backendRequest<BackendGroupListResponse>("/api/groups", {
+        method: "GET"
+      });
+      const first = payload.groups[0];
+      if (!first) {
+        return withLatency(getGroup());
+      }
+      const summary = mapBackendGroupSummary(first);
+      const local = getGroup();
+      return withLatency({
+        ...local,
+        id: summary.id,
+        name: summary.name,
+        weeklyGoal: summary.weeklyGoal,
+        inviteCode: summary.inviteCode,
+        ownerUserId: summary.ownerUserId
+      });
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        return withLatency(getGroup());
+      }
+      throw error;
+    }
+  },
+
+  async getMyGroups() {
+    if (!backendAuthEnabled()) {
+      return withLatency([localGroupToSummary(getGroup())]);
+    }
+
+    try {
+      const payload = await backendRequest<BackendGroupListResponse>("/api/groups", {
+        method: "GET"
+      });
+      return withLatency(payload.groups.map((entry) => mapBackendGroupSummary(entry)));
+    } catch (error) {
+      if (isNotFoundResponse(error)) {
+        return withLatency([]);
+      }
+      if (shouldFallbackToMock(error)) {
+        return withLatency([localGroupToSummary(getGroup())]);
+      }
+      throw error;
+    }
+  },
+
+  async getGroupById(groupId) {
+    if (!backendAuthEnabled()) {
+      const groups = [localGroupToSummary(getGroup())];
+      const found = groups.find((group) => group.id === groupId) ?? groups[0];
+      return withLatency(throwIfMissing(found, "Group not found."));
+    }
+
+    try {
+      const payload = await backendRequest<BackendGroupResponse>(`/api/groups/${groupId}`, {
+        method: "GET"
+      });
+      return withLatency(mapBackendGroupSummary(payload.group));
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        const groups = [localGroupToSummary(getGroup())];
+        const found = groups.find((group) => group.id === groupId) ?? groups[0];
+        return withLatency(throwIfMissing(found, "Group not found."));
+      }
+      throw error;
+    }
+  },
+
+  async createGroup(input) {
+    if (!backendAuthEnabled()) {
+      const code = `SQ-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+      const next = updateState((current) => ({
+        ...current,
+        group: {
+          ...current.group,
+          id: `group-${Date.now()}`,
+          name: input.name,
+          weeklyGoal: input.applicationGoal,
+          inviteCode: code
+        }
+      }));
+
+      return withLatency({
+        group: localGroupToSummary(next.group),
+        invitesCreated: input.inviteEmails.length
+      });
+    }
+
+    try {
+      const payload = await backendRequest<BackendCreateGroupResponse>("/api/groups", {
+        method: "POST",
+        body: JSON.stringify(input)
+      });
+      return withLatency({
+        group: mapBackendGroupSummary(payload.group),
+        invitesCreated: payload.invitesCreated
+      });
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        const code = `SQ-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+        const next = updateState((current) => ({
+          ...current,
+          group: {
+            ...current.group,
+            id: `group-${Date.now()}`,
+            name: input.name,
+            weeklyGoal: input.applicationGoal,
+            inviteCode: code
+          }
+        }));
+
+        return withLatency({
+          group: localGroupToSummary(next.group),
+          invitesCreated: input.inviteEmails.length
+        });
+      }
+      throw error;
+    }
+  },
+
+  async getPendingInvites() {
+    if (!backendAuthEnabled()) {
+      return withLatency([]);
+    }
+
+    try {
+      const payload = await backendRequest<BackendPendingInvitesResponse>(
+        "/api/groups/invites/pending",
+        {
+          method: "GET"
+        }
+      );
+      return withLatency(payload.invites.map((entry) => mapBackendPendingInvite(entry)));
+    } catch (error) {
+      if (isNotFoundResponse(error)) {
+        return withLatency([]);
+      }
+      if (shouldFallbackToMock(error)) {
+        return withLatency([]);
+      }
+      throw error;
+    }
+  },
+
+  async checkUserExistsByEmail(email) {
+    if (!backendAuthEnabled()) {
+      const normalized = email.trim().toLowerCase();
+      const exists = getState().users.some(
+        (entry) => entry.email.trim().toLowerCase() === normalized
+      );
+      return withLatency(exists);
+    }
+
+    try {
+      const encoded = encodeURIComponent(email.trim());
+      const payload = await backendRequest<BackendUserExistsResponse>(
+        `/api/users/exists?email=${encoded}`,
+        {
+          method: "GET"
+        }
+      );
+      return withLatency(Boolean(payload.exists));
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        const normalized = email.trim().toLowerCase();
+        const exists = getState().users.some(
+          (entry) => entry.email.trim().toLowerCase() === normalized
+        );
+        return withLatency(exists);
+      }
+      throw error;
+    }
+  },
+
+  async updateGroupSettings(input) {
+    if (!backendAuthEnabled()) {
+      const next = updateState((current) => ({
+        ...current,
+        group: {
+          ...current.group,
+          weeklyGoal: input.applicationGoal,
+          rules: {
+            ...current.group.rules,
+            baseStakeCents: Math.round(input.stakeUsd * 100)
+          }
+        }
+      }));
+      return withLatency(localGroupToSummary(next.group));
+    }
+
+    try {
+      const payload = await backendRequest<BackendGroupResponse>(
+        `/api/groups/${input.groupId}/settings`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            applicationGoal: input.applicationGoal,
+            stakeUsd: input.stakeUsd,
+            goalCycle: input.goalCycle
+          })
+        }
+      );
+      return withLatency(mapBackendGroupSummary(payload.group));
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        const next = updateState((current) => ({
+          ...current,
+          group: {
+            ...current.group,
+            weeklyGoal: input.applicationGoal,
+            rules: {
+              ...current.group.rules,
+              baseStakeCents: Math.round(input.stakeUsd * 100)
+            }
+          }
+        }));
+        return withLatency(localGroupToSummary(next.group));
+      }
+      throw error;
+    }
+  },
+
+  async respondToInvite(inviteId, action) {
+    if (!backendAuthEnabled()) {
+      return withLatency(null);
+    }
+
+    try {
+      if (action === "accept") {
+        const payload = await backendRequest<BackendGroupResponse>(
+          `/api/groups/invites/${inviteId}/accept`,
+          {
+            method: "POST"
+          }
+        );
+        return withLatency(mapBackendGroupSummary(payload.group));
+      }
+
+      await backendRequest<BackendInviteRejectResponse>(
+        `/api/groups/invites/${inviteId}/reject`,
+        {
+          method: "POST"
+        }
+      );
+      return withLatency(null);
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        return withLatency(null);
+      }
+      throw error;
+    }
   },
 
   async getMembers() {
@@ -767,11 +1151,30 @@ const groupService: GroupService = {
   },
 
   async joinWithInviteCode(inviteCode) {
-    const state = getState();
-    if (state.group.inviteCode.toLowerCase() !== inviteCode.trim().toLowerCase()) {
-      throw new Error("Invalid invite code.");
+    if (!backendAuthEnabled()) {
+      const state = getState();
+      if (state.group.inviteCode.toLowerCase() !== inviteCode.trim().toLowerCase()) {
+        throw new Error("Invalid invite code.");
+      }
+      return withLatency(localGroupToSummary(state.group));
     }
-    return withLatency(state.group);
+
+    try {
+      const payload = await backendRequest<BackendGroupResponse>("/api/groups/join-code", {
+        method: "POST",
+        body: JSON.stringify({ inviteCode })
+      });
+      return withLatency(mapBackendGroupSummary(payload.group));
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        const state = getState();
+        if (state.group.inviteCode.toLowerCase() !== inviteCode.trim().toLowerCase()) {
+          throw new Error("Invalid invite code.");
+        }
+        return withLatency(localGroupToSummary(state.group));
+      }
+      throw error;
+    }
   }
 };
 

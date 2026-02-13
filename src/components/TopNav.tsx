@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../app/AuthContext";
-import { mockMyGroups } from "../mocks/data/mockMyGroups";
+import { useMyGroupsList, usePendingInvites } from "../hooks/useAppQueries";
 
 const routeTitle: Record<string, string> = {
   "/my-groups": "My Groups",
@@ -17,7 +17,6 @@ const mockNotifications = [
   { id: "notif-2", message: "You are behind the goal this week" },
   { id: "notif-3", message: "You have a group invite in My Groups" }
 ];
-const pendingInviteCount = 4;
 const selectedMockGroupStorageKey = "incentapply_selected_mock_group_id";
 
 function getUserInitials(firstName?: string, lastName?: string): string {
@@ -31,6 +30,8 @@ export function TopNav() {
   const { user } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+  const myGroupsQuery = useMyGroupsList();
+  const pendingInvitesQuery = usePendingInvites();
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [groupMenuOpen, setGroupMenuOpen] = useState(false);
   const groupMenuRef = useRef<HTMLDivElement | null>(null);
@@ -46,7 +47,8 @@ export function TopNav() {
 
   const avatarUrl = user?.avatarUrl?.trim();
   const initials = getUserInitials(user?.firstName, user?.lastName);
-  const groupLinks = mockMyGroups;
+  const groupLinks = myGroupsQuery.data ?? [];
+  const pendingInviteCount = pendingInvitesQuery.data?.length ?? 0;
   const routeGroupId = groupLinks.some((group) => group.id === currentGroupId)
     ? currentGroupId
     : undefined;
@@ -59,6 +61,11 @@ export function TopNav() {
     (groupLinks.some((group) => group.id === storedGroupId) ? storedGroupId : undefined) ??
     groupLinks[0]?.id;
   const activeGroup = groupLinks.find((group) => group.id === activeGroupId);
+
+  const startFreshCreateGroup = () => {
+    window.dispatchEvent(new Event("incentapply:create-group-fresh-start"));
+    navigate("/my-groups/create");
+  };
 
   useEffect(() => {
     setNotificationsOpen(false);
@@ -157,21 +164,21 @@ export function TopNav() {
               ) : null}
             </div>
 
-            <Link
-              to="/my-groups/create"
+            <button
+              type="button"
+              onClick={startFreshCreateGroup}
               className={subPageButtonClass(location.pathname === "/my-groups/create")}
             >
               <span className="material-icons text-base">add</span>
               <span className="whitespace-nowrap">Create Group</span>
-            </Link>
+            </button>
 
             <Link
               to="/my-groups/join"
               className={subPageButtonClass(location.pathname === "/my-groups/join")}
             >
-              <span className="whitespace-nowrap">Join Group</span>
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-primary text-[11px] font-bold text-background-dark">
-                {pendingInviteCount}
+              <span className="whitespace-nowrap">
+                Join Group{pendingInviteCount > 0 ? ` ${pendingInviteCount}` : ""}
               </span>
             </Link>
           </div>

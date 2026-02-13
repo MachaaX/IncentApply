@@ -1,57 +1,25 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useJoinGroup } from "../hooks/useAppQueries";
+import { useJoinGroup, usePendingInvites, useRespondToInvite } from "../hooks/useAppQueries";
 
-interface MockInvite {
-  id: string;
-  invitedBy: string;
-  groupName: string;
-  goalApps: number;
-  weeklyStakeUsd: number;
-  groupId: string;
-}
-
-const initialMockInvites: MockInvite[] = [
-  {
-    id: "invite-1",
-    invitedBy: "Sarah M",
-    groupName: "Growth Hunters",
-    goalApps: 20,
-    weeklyStakeUsd: 15,
-    groupId: "group-1"
-  },
-  {
-    id: "invite-2",
-    invitedBy: "Marcus J",
-    groupName: "Offer Sprint Squad",
-    goalApps: 30,
-    weeklyStakeUsd: 25,
-    groupId: "group-2"
-  },
-  {
-    id: "invite-3",
-    invitedBy: "Elena R",
-    groupName: "Frontend Strike Team",
-    goalApps: 15,
-    weeklyStakeUsd: 10,
-    groupId: "group-3"
-  },
-  {
-    id: "invite-4",
-    invitedBy: "David K",
-    groupName: "Backend Grind Crew",
-    goalApps: 25,
-    weeklyStakeUsd: 20,
-    groupId: "group-3"
+function formatDateLabel(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
   }
-];
+  return parsed.toLocaleString();
+}
 
 export function MyGroupsJoinPage() {
   const navigate = useNavigate();
   const joinGroup = useJoinGroup();
+  const pendingInvites = usePendingInvites();
+  const respondToInvite = useRespondToInvite();
+
   const [inviteCode, setInviteCode] = useState("");
   const [status, setStatus] = useState<string | null>(null);
-  const [invites, setInvites] = useState<MockInvite[]>(initialMockInvites);
+
+  const invites = pendingInvites.data ?? [];
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -71,15 +39,29 @@ export function MyGroupsJoinPage() {
     }
   };
 
-  const rejectInvite = (inviteId: string) => {
-    setInvites((current) => current.filter((invite) => invite.id !== inviteId));
-    setStatus("Invitation rejected.");
+  const rejectInvite = async (inviteId: string) => {
+    setStatus(null);
+    try {
+      await respondToInvite.mutateAsync({ inviteId, action: "reject" });
+      setStatus("Invitation rejected.");
+    } catch (reason) {
+      setStatus(reason instanceof Error ? reason.message : "Unable to reject invite.");
+    }
   };
 
-  const acceptInvite = (inviteId: string, groupId: string) => {
-    setInvites((current) => current.filter((invite) => invite.id !== inviteId));
-    setStatus("Invitation accepted. Redirecting to group...");
-    navigate(`/my-groups/${groupId}`);
+  const acceptInvite = async (inviteId: string) => {
+    setStatus(null);
+    try {
+      const joined = await respondToInvite.mutateAsync({ inviteId, action: "accept" });
+      if (joined) {
+        setStatus("Invitation accepted. Redirecting to group...");
+        navigate(`/my-groups/${joined.id}`);
+        return;
+      }
+      setStatus("Invitation accepted.");
+    } catch (reason) {
+      setStatus(reason instanceof Error ? reason.message : "Unable to accept invite.");
+    }
   };
 
   return (
@@ -126,7 +108,23 @@ export function MyGroupsJoinPage() {
           </span>
         </div>
 
-        {invites.length ? (
+        {pendingInvites.isLoading ? (
+          <div className="flex min-h-0 flex-1 items-center justify-center rounded-lg border border-dashed border-[#326755] bg-[#11221c] px-4">
+            <p className="text-sm text-[#64877a]">Loading invites...</p>
+          </div>
+        ) : null}
+
+        {!pendingInvites.isLoading && pendingInvites.error ? (
+          <div className="flex min-h-0 flex-1 items-center justify-center rounded-lg border border-dashed border-[#7a3f3f] bg-[#211212] px-4">
+            <p className="text-sm text-red-300">
+              {pendingInvites.error instanceof Error
+                ? pendingInvites.error.message
+                : "Unable to load pending invites."}
+            </p>
+          </div>
+        ) : null}
+
+        {!pendingInvites.isLoading && !pendingInvites.error && invites.length ? (
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
             <ul className="space-y-3">
               {invites.map((invite) => (
@@ -141,23 +139,29 @@ export function MyGroupsJoinPage() {
                       </p>
                       <p className="text-lg font-bold text-white">{invite.groupName}</p>
                       <p className="text-sm text-[#64877a]">
-                        Goal: <span className="text-[#92c9b7]">{invite.goalApps} apps/week</span> ·
-                        Stake: <span className="text-[#92c9b7]">${invite.weeklyStakeUsd}/week</span>
+                        Cycle: <span className="text-[#92c9b7] capitalize">{invite.goalCycle}</span> · Goal:{" "}
+                        <span className="text-[#92c9b7]">{invite.applicationGoal} apps</span> · Stake:{" "}
+                        <span className="text-[#92c9b7]">${invite.stakeUsd}</span>
+                      </p>
+                      <p className="text-xs text-[#64877a]">
+                        Expires: <span className="text-[#92c9b7]">{formatDateLabel(invite.expiresAt)}</span>
                       </p>
                     </div>
 
                     <div className="flex gap-2 self-start sm:self-center">
                       <button
                         type="button"
-                        onClick={() => rejectInvite(invite.id)}
-                        className="rounded-lg border border-[#3b5550] bg-[#182c27] px-4 py-2 text-xs font-bold uppercase tracking-wide text-slate-300 transition-colors hover:text-white"
+                        onClick={() => void rejectInvite(invite.id)}
+                        disabled={respondToInvite.isPending}
+                        className="rounded-lg border border-[#3b5550] bg-[#182c27] px-4 py-2 text-xs font-bold uppercase tracking-wide text-slate-300 transition-colors hover:text-white disabled:opacity-70"
                       >
                         Reject
                       </button>
                       <button
                         type="button"
-                        onClick={() => acceptInvite(invite.id, invite.groupId)}
-                        className="rounded-lg bg-primary px-4 py-2 text-xs font-bold uppercase tracking-wide text-background-dark transition-colors hover:bg-emerald-400"
+                        onClick={() => void acceptInvite(invite.id)}
+                        disabled={respondToInvite.isPending}
+                        className="rounded-lg bg-primary px-4 py-2 text-xs font-bold uppercase tracking-wide text-background-dark transition-colors hover:bg-emerald-400 disabled:opacity-70"
                       >
                         Accept
                       </button>
@@ -167,11 +171,13 @@ export function MyGroupsJoinPage() {
               ))}
             </ul>
           </div>
-        ) : (
+        ) : null}
+
+        {!pendingInvites.isLoading && !pendingInvites.error && !invites.length ? (
           <div className="flex min-h-0 flex-1 items-center justify-center rounded-lg border border-dashed border-[#326755] bg-[#11221c] px-4">
             <p className="text-sm text-[#64877a]">No pending invites right now.</p>
           </div>
-        )}
+        ) : null}
       </section>
     </div>
   );

@@ -1,5 +1,12 @@
 import { useMemo } from "react";
-import { Navigate, Outlet, RouterProvider, createBrowserRouter, useLocation } from "react-router-dom";
+import {
+  Link,
+  Navigate,
+  Outlet,
+  RouterProvider,
+  createBrowserRouter,
+  useLocation
+} from "react-router-dom";
 import { useAuth } from "./AuthContext";
 import { AppShell } from "../components/AppShell";
 import { GroupSetupPage } from "../pages/GroupSetupPage";
@@ -7,7 +14,7 @@ import { MembersPage } from "../pages/MembersPage";
 import { MyGroupPage } from "../pages/MyGroupPage";
 import { MyGroupsCreatePage } from "../pages/MyGroupsCreatePage";
 import { MyGroupsJoinPage } from "../pages/MyGroupsJoinPage";
-import { mockMyGroups } from "../mocks/data/mockMyGroups";
+import { useMyGroupsList, usePendingInvites } from "../hooks/useAppQueries";
 import { SettlementsPage } from "../pages/SettlementsPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { WalletPage } from "../pages/WalletPage";
@@ -50,10 +57,53 @@ function RootRedirect() {
   return <Navigate to={session ? "/my-groups" : "/welcome"} replace />;
 }
 
-function MyGroupsIndexRedirect() {
-  const firstGroup = mockMyGroups[0];
+function MyGroupsIndexPage() {
+  const groupsQuery = useMyGroupsList();
+  const pendingInvitesQuery = usePendingInvites();
+
+  if (groupsQuery.isLoading) {
+    return <p className="p-6 text-sm text-slate-400">Loading groups...</p>;
+  }
+
+  const firstGroup = groupsQuery.data?.[0];
   if (!firstGroup) {
-    return <p className="p-6 text-sm text-slate-400">No groups available.</p>;
+    const pendingInviteCount = pendingInvitesQuery.data?.length ?? 0;
+    const recoverableNotFound =
+      groupsQuery.error instanceof Error &&
+      groupsQuery.error.message.toLowerCase().includes("status 404");
+
+    if (groupsQuery.error && !recoverableNotFound) {
+      return (
+        <section className="rounded-2xl border border-red-500/20 bg-red-500/10 p-6">
+          <p className="text-sm text-red-300">
+            {groupsQuery.error.message || "Unable to load your groups right now."}
+          </p>
+        </section>
+      );
+    }
+
+    return (
+      <section className="space-y-4 rounded-2xl border border-primary/20 bg-[#162e25] p-6">
+        <h2 className="text-2xl font-black text-white">You are not part of any groups yet.</h2>
+        <p className="text-sm text-[#92c9b7]">
+          Create a group, accept an invitation, or join with a valid invite code.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            to="/my-groups/create"
+            className="rounded-lg bg-primary px-5 py-2.5 text-sm font-bold text-background-dark"
+          >
+            Create Group
+          </Link>
+          <Link
+            to="/my-groups/join"
+            className="rounded-lg border border-primary/30 px-5 py-2.5 text-sm font-bold text-primary transition-colors hover:bg-primary/10"
+          >
+            Join Group{pendingInviteCount > 0 ? ` (${pendingInviteCount})` : ""}
+          </Link>
+        </div>
+      </section>
+    );
   }
 
   return <Navigate to={`/my-groups/${firstGroup.id}`} replace />;
@@ -105,7 +155,7 @@ function createAppRouter() {
           children: [
             {
               path: "/my-groups",
-              element: <MyGroupsIndexRedirect />
+              element: <MyGroupsIndexPage />
             },
             {
               path: "/my-groups/create",
