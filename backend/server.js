@@ -327,7 +327,7 @@ async function initDb() {
     }
 
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS groups (
+      CREATE TABLE IF NOT EXISTS app_groups (
         id VARCHAR(191) PRIMARY KEY,
         name VARCHAR(${GROUP_NAME_MAX_LENGTH}) NOT NULL,
         owner_user_id VARCHAR(191) NOT NULL,
@@ -349,7 +349,7 @@ async function initDb() {
         role VARCHAR(32) NOT NULL DEFAULT 'member',
         joined_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (group_id, user_id),
-        CONSTRAINT fk_group_members_group FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+        CONSTRAINT fk_group_members_group FOREIGN KEY (group_id) REFERENCES app_groups(id) ON DELETE CASCADE,
         CONSTRAINT fk_group_members_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
@@ -365,7 +365,7 @@ async function initDb() {
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         responded_at TIMESTAMP NULL DEFAULT NULL,
-        CONSTRAINT fk_group_invites_group FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+        CONSTRAINT fk_group_invites_group FOREIGN KEY (group_id) REFERENCES app_groups(id) ON DELETE CASCADE,
         CONSTRAINT fk_group_invites_sender FOREIGN KEY (sent_by_user_id) REFERENCES users(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
@@ -374,13 +374,13 @@ async function initDb() {
       SELECT COUNT(*) AS count
       FROM information_schema.columns
       WHERE table_schema = DATABASE()
-        AND table_name = 'groups'
+        AND table_name = 'app_groups'
         AND column_name = 'goal_cycle'
     `);
 
     if (Number(goalCycleColumn.rows[0]?.count ?? 0) === 0) {
       await pool.query(
-        `ALTER TABLE groups ADD COLUMN goal_cycle VARCHAR(16) NOT NULL DEFAULT '${DEFAULT_GOAL_CYCLE}'`
+        `ALTER TABLE app_groups ADD COLUMN goal_cycle VARCHAR(16) NOT NULL DEFAULT '${DEFAULT_GOAL_CYCLE}'`
       );
     }
 
@@ -419,7 +419,7 @@ async function initDb() {
   `);
 
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS groups (
+    CREATE TABLE IF NOT EXISTS app_groups (
       id TEXT PRIMARY KEY,
       name VARCHAR(${GROUP_NAME_MAX_LENGTH}) NOT NULL,
       owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -434,13 +434,13 @@ async function initDb() {
   `);
 
   await pool.query(`
-    ALTER TABLE groups
+    ALTER TABLE app_groups
     ADD COLUMN IF NOT EXISTS goal_cycle TEXT NOT NULL DEFAULT '${DEFAULT_GOAL_CYCLE}';
   `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS group_members (
-      group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+      group_id TEXT NOT NULL REFERENCES app_groups(id) ON DELETE CASCADE,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       role TEXT NOT NULL DEFAULT 'member',
       joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -451,7 +451,7 @@ async function initDb() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS group_invites (
       id TEXT PRIMARY KEY,
-      group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+      group_id TEXT NOT NULL REFERENCES app_groups(id) ON DELETE CASCADE,
       recipient_email TEXT NOT NULL,
       sent_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       status TEXT NOT NULL DEFAULT 'pending',
@@ -637,7 +637,7 @@ function normalizeInviteEmails(value, currentUserEmail) {
 async function createUniqueInviteCode() {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const candidate = `SQ-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
-    const existing = await pool.query("SELECT id FROM groups WHERE invite_code = $1 LIMIT 1", [
+    const existing = await pool.query("SELECT id FROM app_groups WHERE invite_code = $1 LIMIT 1", [
       candidate
     ]);
     if (!existing.rows.length) {
@@ -682,7 +682,7 @@ async function getGroupByIdForMember(groupId, userId) {
         owner.first_name AS owner_first_name,
         owner.last_name AS owner_last_name,
         owner.email AS owner_email
-      FROM groups g
+      FROM app_groups g
       INNER JOIN group_members gm
         ON gm.group_id = g.id
       LEFT JOIN users owner
@@ -706,7 +706,7 @@ async function listGroupsForUser(userId) {
         owner.first_name AS owner_first_name,
         owner.last_name AS owner_last_name,
         owner.email AS owner_email
-      FROM groups g
+      FROM app_groups g
       INNER JOIN group_members gm
         ON gm.group_id = g.id
       LEFT JOIN users owner
@@ -1858,7 +1858,7 @@ app.post("/api/groups", authMiddleware, async (req, res) => {
 
     await pool.query(
       `
-        INSERT INTO groups (
+        INSERT INTO app_groups (
           id,
           name,
           owner_user_id,
@@ -1937,7 +1937,7 @@ app.post("/api/groups/join-code", authMiddleware, async (req, res) => {
           owner.first_name AS owner_first_name,
           owner.last_name AS owner_last_name,
           owner.email AS owner_email
-        FROM groups g
+        FROM app_groups g
         LEFT JOIN users owner
           ON owner.id = g.owner_user_id
         WHERE LOWER(g.invite_code) = LOWER($1)
@@ -2005,7 +2005,7 @@ app.get("/api/groups/invites/pending", authMiddleware, async (req, res) => {
           owner.last_name AS owner_last_name,
           owner.email AS owner_email
         FROM group_invites gi
-        INNER JOIN groups g
+        INNER JOIN app_groups g
           ON g.id = gi.group_id
         LEFT JOIN users owner
           ON owner.id = g.owner_user_id
@@ -2049,7 +2049,7 @@ app.post("/api/groups/invites/:inviteId/accept", authMiddleware, async (req, res
           g.invite_code,
           g.invite_code_expires_at
         FROM group_invites gi
-        INNER JOIN groups g
+        INNER JOIN app_groups g
           ON g.id = gi.group_id
         WHERE gi.id = $1
           AND gi.recipient_email = $2
@@ -2190,7 +2190,7 @@ app.patch("/api/groups/:groupId/settings", authMiddleware, async (req, res) => {
 
     await pool.query(
       `
-        UPDATE groups
+        UPDATE app_groups
         SET weekly_goal = $2,
             weekly_stake_usd = $3,
             goal_cycle = $4,
