@@ -187,6 +187,10 @@ function createAppRouter() {
             },
             {
               path: "/settings",
+              element: <Navigate to="/settings/profile" replace />
+            },
+            {
+              path: "/settings/:section",
               element: <SettingsPage />
             },
             {

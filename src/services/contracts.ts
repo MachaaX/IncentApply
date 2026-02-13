@@ -22,6 +22,12 @@ import type {
 export interface AuthService {
   getSession(): Promise<AuthSession | null>;
   getCurrentUser(): Promise<User | null>;
+  updateProfile(input: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    avatarUrl?: string | null;
+  }): Promise<User>;
   loginWithGoogle(email?: string): Promise<AuthSession>;
   registerWithGoogle(email?: string): Promise<AuthSession>;
   loginWithPassword(email: string, password: string): Promise<AuthSession>;

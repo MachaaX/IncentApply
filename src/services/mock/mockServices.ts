@@ -257,6 +257,10 @@ function defaultNamesFromEmail(email: string): { firstName: string; lastName: st
   return { firstName, lastName };
 }
 
+function isValidEmailAddress(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
 function sessionProviderFromAuthProvider(
   provider: BackendUserProfile["authProvider"]
 ): AuthSession["provider"] {
@@ -497,6 +501,100 @@ function getCurrentUserRecord(): User {
   const session = getCurrentSession();
   const user = state.users.find((entry) => entry.id === session.userId);
   return throwIfMissing(user, "Unable to find active user record.");
+}
+
+function syncLocalUserProfileFromBackend(profile: BackendUserProfile): User {
+  const session = getCurrentSession();
+  const normalizedEmail = profile.email.trim().toLowerCase();
+  let updatedUser: User | undefined;
+
+  updateState((current) => {
+    const currentUser = current.users.find((entry) => entry.id === session.userId);
+    if (!currentUser) {
+      return current;
+    }
+
+    const duplicate = current.users.find(
+      (entry) => entry.id !== session.userId && entry.email.trim().toLowerCase() === normalizedEmail
+    );
+    if (duplicate) {
+      throw new Error("An account already exists with this email.");
+    }
+
+    updatedUser = {
+      ...currentUser,
+      firstName: (profile.firstName ?? currentUser.firstName).trim(),
+      lastName: (profile.lastName ?? currentUser.lastName).trim(),
+      email: normalizedEmail,
+      avatarUrl:
+        profile.avatarUrl === null
+          ? undefined
+          : profile.avatarUrl === undefined
+            ? currentUser.avatarUrl
+            : profile.avatarUrl
+    };
+
+    return {
+      ...current,
+      users: current.users.map((entry) => (entry.id === session.userId ? updatedUser! : entry))
+    };
+  });
+
+  return throwIfMissing(updatedUser, "Unable to find active user record.");
+}
+
+function updateLocalUserProfile(input: {
+  firstName: string;
+  lastName: string;
+  email: string;
+  avatarUrl?: string | null;
+}): User {
+  const session = getCurrentSession();
+  const trimmedFirstName = input.firstName.trim();
+  const trimmedLastName = input.lastName.trim();
+  const normalizedEmail = input.email.trim().toLowerCase();
+
+  if (!trimmedFirstName || !trimmedLastName || !normalizedEmail) {
+    throw new Error("First name, last name, and email are required.");
+  }
+  if (!isValidEmailAddress(normalizedEmail)) {
+    throw new Error("Please provide a valid email address.");
+  }
+
+  let updatedUser: User | undefined;
+  updateState((current) => {
+    const duplicate = current.users.find(
+      (entry) => entry.id !== session.userId && entry.email.trim().toLowerCase() === normalizedEmail
+    );
+    if (duplicate) {
+      throw new Error("An account already exists with this email.");
+    }
+
+    const currentUser = current.users.find((entry) => entry.id === session.userId);
+    if (!currentUser) {
+      return current;
+    }
+
+    updatedUser = {
+      ...currentUser,
+      firstName: trimmedFirstName,
+      lastName: trimmedLastName,
+      email: normalizedEmail,
+      avatarUrl:
+        input.avatarUrl === undefined
+          ? currentUser.avatarUrl
+          : input.avatarUrl === null || input.avatarUrl.trim().length === 0
+            ? undefined
+            : input.avatarUrl
+    };
+
+    return {
+      ...current,
+      users: current.users.map((entry) => (entry.id === session.userId ? updatedUser! : entry))
+    };
+  });
+
+  return throwIfMissing(updatedUser, "Unable to find active user record.");
 }
 
 function getGroup(): Group {
@@ -788,6 +886,25 @@ const authService: AuthService = {
     }
     const user = state.users.find((entry) => entry.id === session.userId) ?? null;
     return withLatency(user);
+  },
+
+  async updateProfile(input) {
+    if (!backendAuthEnabled()) {
+      return withLatency(updateLocalUserProfile(input));
+    }
+
+    try {
+      const payload = await backendRequest<{ user: BackendUserProfile }>("/api/auth/me", {
+        method: "PATCH",
+        body: JSON.stringify(input)
+      });
+      return withLatency(syncLocalUserProfileFromBackend(payload.user));
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        return withLatency(updateLocalUserProfile(input));
+      }
+      throw error;
+    }
   },
 
   async loginWithGoogle(email) {

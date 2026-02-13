@@ -13,6 +13,12 @@ interface AuthContextValue {
   session: AuthSession | null;
   user: User | null;
   loading: boolean;
+  updateProfile: (input: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    avatarUrl?: string | null;
+  }) => Promise<void>;
   signInWithGoogle: (email?: string) => Promise<void>;
   signUpWithGoogle: (email?: string) => Promise<void>;
   signInWithPassword: (email: string, password: string) => Promise<void>;
@@ -125,11 +131,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [authService]);
 
+  const updateProfile = useCallback(
+    async (input: {
+      firstName: string;
+      lastName: string;
+      email: string;
+      avatarUrl?: string | null;
+    }) => {
+      const updated = await authService.updateProfile(input);
+      setUser(updated);
+    },
+    [authService]
+  );
+
   const value = useMemo<AuthContextValue>(
     () => ({
       session,
       user,
       loading,
+      updateProfile,
       signInWithGoogle,
       signUpWithGoogle,
       signInWithPassword,
@@ -144,6 +164,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       signUpWithGoogle,
       signInWithPassword,
       signOut,
+      updateProfile,
       user
     ]
   );

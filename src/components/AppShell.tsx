@@ -7,6 +7,7 @@ export function AppShell() {
   const location = useLocation();
   const noScrollMyGroupsPage =
     location.pathname === "/my-groups/create" || location.pathname === "/my-groups/join";
+  const noScrollWalletPage = location.pathname === "/wallet";
 
   return (
     <div className="min-h-screen bg-background-dark text-slate-100">
@@ -15,7 +16,7 @@ export function AppShell() {
         <TopNav />
         <main
           className={`mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 ${
-            noScrollMyGroupsPage
+            noScrollMyGroupsPage || noScrollWalletPage
               ? "h-[calc(100dvh-5rem)] overflow-hidden pb-4 pt-4"
               : "pb-24 pt-6"
           }`}

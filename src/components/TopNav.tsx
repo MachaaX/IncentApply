@@ -9,8 +9,7 @@ const routeTitle: Record<string, string> = {
   "/group/setup": "Group Setup",
   "/wallet": "My Wallet",
   "/applications": "Applications",
-  "/settlements": "Settlements",
-  "/settings": "Settings"
+  "/settlements": "Settlements"
 };
 
 const mockNotifications = [
@@ -36,6 +35,8 @@ export function TopNav() {
   const [groupMenuOpen, setGroupMenuOpen] = useState(false);
   const groupMenuRef = useRef<HTMLDivElement | null>(null);
   const isMyGroupsRoute = location.pathname.startsWith("/my-groups");
+  const isSettingsRoute = location.pathname.startsWith("/settings");
+  const isWalletRoute = location.pathname === "/wallet";
   const currentGroupId = useMemo(() => {
     const match = location.pathname.match(/^\/my-groups\/([^/]+)$/);
     return match ? match[1] : undefined;
@@ -194,11 +195,10 @@ export function TopNav() {
               </span>
             </Link>
           </div>
+        ) : isSettingsRoute || isWalletRoute ? (
+          <div />
         ) : (
-          <div>
-            <h1 className="text-xl font-bold text-white">{title}</h1>
-            <p className="text-xs text-slate-400">Friday to Friday challenge cycle</p>
-          </div>
+          <h1 className="text-xl font-bold text-white">{title}</h1>
         )}
         <div className="flex items-center gap-3">
           <button
@@ -215,7 +215,7 @@ export function TopNav() {
           </button>
 
           <Link
-            to="/settings"
+            to="/settings/profile"
             className="inline-flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border border-primary/30 bg-primary/10 text-sm font-bold text-white transition-colors hover:border-primary"
             aria-label="Open profile settings"
           >

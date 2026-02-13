@@ -54,6 +54,7 @@ const ENTRA_DISCOVERY_URL = process.env.ENTRA_DISCOVERY_URL;
 const ENTRA_SCOPES = process.env.ENTRA_SCOPES ?? "openid profile email";
 const GROUP_NAME_MAX_LENGTH = 30;
 const INVITE_EXPIRY_MS = 24 * 60 * 60 * 1000;
+const MAX_AVATAR_DATA_URL_LENGTH = 60000;
 const DEFAULT_GOAL_CYCLE = "weekly";
 const ALLOWED_GOAL_CYCLES = new Set(["daily", "weekly", "biweekly"]);
 const DEFAULT_GOAL_START_DAY = "monday";
@@ -534,6 +535,20 @@ function isValidEmail(email) {
 
 function normalizeEmail(email) {
   return email.trim().toLowerCase();
+}
+
+function isValidAvatarUrl(value) {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) {
+    return true;
+  }
+  if (trimmed.length > MAX_AVATAR_DATA_URL_LENGTH) {
+    return false;
+  }
+  if (trimmed.startsWith("data:image/")) {
+    return /^data:image\/(?:png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=]+$/i.test(trimmed);
+  }
+  return /^https?:\/\/\S+$/i.test(trimmed);
 }
 
 function normalizeGoalCycle(value) {
@@ -1877,6 +1892,108 @@ app.get("/api/auth/me", authMiddleware, async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to fetch profile." });
+  }
+});
+
+app.patch("/api/auth/me", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    if (!userId) {
+      return res.status(401).json({ error: "Missing user identity." });
+    }
+
+    const firstNameRaw = typeof req.body?.firstName === "string" ? req.body.firstName : "";
+    const lastNameRaw = typeof req.body?.lastName === "string" ? req.body.lastName : "";
+    const emailRaw = typeof req.body?.email === "string" ? req.body.email : "";
+    const hasAvatarUrlField = Object.prototype.hasOwnProperty.call(req.body ?? {}, "avatarUrl");
+    const avatarUrlRaw = hasAvatarUrlField ? req.body?.avatarUrl : undefined;
+
+    const firstName = firstNameRaw.trim();
+    const lastName = lastNameRaw.trim();
+    const email = normalizeEmail(emailRaw);
+    const avatarUrl =
+      avatarUrlRaw === undefined
+        ? undefined
+        : avatarUrlRaw === null
+          ? null
+          : typeof avatarUrlRaw === "string"
+            ? avatarUrlRaw.trim()
+            : "__invalid__";
+
+    if (!firstName || !lastName || !email) {
+      return res
+        .status(400)
+        .json({ error: "First name, last name, and email are required." });
+    }
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: "Invalid email format." });
+    }
+    if (avatarUrl === "__invalid__") {
+      return res.status(400).json({ error: "Avatar URL must be a string or null." });
+    }
+    if (
+      typeof avatarUrl === "string" &&
+      avatarUrl.length > 0 &&
+      !isValidAvatarUrl(avatarUrl)
+    ) {
+      return res.status(400).json({
+        error:
+          "Avatar image is invalid or too large. Upload a smaller image (PNG/JPG/WEBP/GIF)."
+      });
+    }
+
+    const existingWithEmail = await getUserByEmail(email);
+    if (existingWithEmail && existingWithEmail.id !== userId) {
+      return res.status(409).json({ error: "An account already exists with this email." });
+    }
+
+    if (hasAvatarUrlField) {
+      await pool.query(
+        `
+          UPDATE users
+          SET first_name = $2,
+              last_name = $3,
+              email = $4,
+              avatar_url = $5,
+              updated_at = NOW()
+          WHERE id = $1
+        `,
+        [userId, firstName, lastName, email, avatarUrl && avatarUrl.length ? avatarUrl : null]
+      );
+    } else {
+      await pool.query(
+        `
+          UPDATE users
+          SET first_name = $2,
+              last_name = $3,
+              email = $4,
+              updated_at = NOW()
+          WHERE id = $1
+        `,
+        [userId, firstName, lastName, email]
+      );
+    }
+
+    const updatedUser = await getUserById(userId);
+    if (!updatedUser) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    return res.status(200).json({
+      user: {
+        id: updatedUser.id,
+        email: updatedUser.email,
+        firstName: updatedUser.first_name,
+        lastName: updatedUser.last_name,
+        avatarUrl: updatedUser.avatar_url,
+        authProvider: updatedUser.auth_provider,
+        createdAt: updatedUser.created_at
+      }
+    });
+  } catch (error) {
+    return res
+      .status(500)
+      .json({ error: error instanceof Error ? error.message : "Unable to update profile." });
   }
 });
 
