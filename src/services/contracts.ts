@@ -3,6 +3,7 @@ import type {
   AuthProvider,
   AuthSession,
   BankAccount,
+  GroupActivitySnapshot,
   GmailSyncState,
   Group,
   GroupGoalStartDay,
@@ -44,6 +45,7 @@ export interface GroupService {
   getCurrentGroup(): Promise<Group>;
   getMyGroups(): Promise<MyGroupSummary[]>;
   getGroupById(groupId: string): Promise<MyGroupSummary>;
+  getGroupActivity(groupId: string): Promise<GroupActivitySnapshot>;
   createGroup(input: {
     name: string;
     applicationGoal: number;
@@ -72,6 +74,12 @@ export interface GroupService {
   joinWithInviteCode(inviteCode: string): Promise<MyGroupSummary>;
   regenerateInviteCode(groupId: string): Promise<MyGroupSummary>;
   deleteGroup(groupId: string): Promise<void>;
+  updateMemberApplicationCount(input: {
+    groupId: string;
+    memberId: string;
+    delta?: number;
+    applicationsCount?: number;
+  }): Promise<{ memberId: string; applicationsCount: number }>;
 }
 
 export interface ApplicationService {

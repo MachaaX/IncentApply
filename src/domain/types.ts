@@ -64,6 +64,7 @@ export type GroupGoalStartDay =
   | "friday"
   | "saturday";
 export type GroupMemberRole = "admin" | "member";
+export type GroupMemberProgressStatus = "crushing" | "on_track" | "at_risk" | "slow_start";
 
 export interface MyGroupSummary {
   id: string;
@@ -80,6 +81,31 @@ export interface MyGroupSummary {
   inviteCode: string;
   inviteCodeExpiresAt: string;
   createdAt: string;
+}
+
+export interface GroupCycleWindow {
+  key: string;
+  label: "day" | "week" | "biweekly";
+  startsAt: string;
+  endsAt: string;
+}
+
+export interface GroupActivityMember {
+  userId: string;
+  name: string;
+  email: string;
+  role: GroupMemberRole;
+  avatarUrl?: string | null;
+  isCurrentUser: boolean;
+  applicationsCount: number;
+  goal: number;
+  status: GroupMemberProgressStatus;
+}
+
+export interface GroupActivitySnapshot {
+  group: MyGroupSummary;
+  cycle: GroupCycleWindow;
+  members: GroupActivityMember[];
 }
 
 export interface PendingGroupInvite {

@@ -34,6 +34,15 @@ export function useMyGroupSummary(groupId?: string) {
   });
 }
 
+export function useGroupActivity(groupId?: string) {
+  const { groupService } = useServices();
+  return useQuery({
+    enabled: Boolean(groupId),
+    queryKey: ["group-activity", groupId],
+    queryFn: () => groupService.getGroupActivity(groupId ?? "")
+  });
+}
+
 export function useMembers() {
   const { groupService } = useServices();
   return useQuery({
@@ -260,6 +269,7 @@ export function useUpdateGroupSettings() {
     }) => groupService.updateGroupSettings(input),
     onSuccess: (_, input) => {
       void queryClient.invalidateQueries({ queryKey: ["my-group-summary", input.groupId] });
+      void queryClient.invalidateQueries({ queryKey: ["group-activity", input.groupId] });
       void queryClient.invalidateQueries({ queryKey: ["my-groups-list"] });
       void queryClient.invalidateQueries({ queryKey: ["pending-invites"] });
     }
@@ -276,6 +286,22 @@ export function useDeleteGroup() {
       void queryClient.invalidateQueries({ queryKey: ["pending-invites"] });
       void queryClient.invalidateQueries({ queryKey: ["group"] });
       void queryClient.invalidateQueries({ queryKey: ["members"] });
+    }
+  });
+}
+
+export function useUpdateMemberApplicationCount() {
+  const { groupService } = useServices();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      groupId: string;
+      memberId: string;
+      delta?: number;
+      applicationsCount?: number;
+    }) => groupService.updateMemberApplicationCount(input),
+    onSuccess: (_, input) => {
+      void queryClient.invalidateQueries({ queryKey: ["group-activity", input.groupId] });
     }
   });
 }

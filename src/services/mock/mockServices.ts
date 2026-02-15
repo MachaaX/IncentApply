@@ -4,6 +4,7 @@ import type {
   AuthSession,
   BankAccount,
   Group,
+  GroupActivitySnapshot,
   GroupGoalStartDay,
   MyGroupSummary,
   PendingGroupInvite,
@@ -111,6 +112,32 @@ interface BackendUserExistsResponse {
   exists: boolean;
 }
 
+interface BackendGroupActivitySnapshot {
+  group: BackendGroupSummary;
+  cycle: {
+    key: string;
+    label: "day" | "week" | "biweekly";
+    startsAt: string;
+    endsAt: string;
+  };
+  members: Array<{
+    userId: string;
+    name: string;
+    email: string;
+    role: "admin" | "member";
+    avatarUrl?: string | null;
+    isCurrentUser: boolean;
+    applicationsCount: number;
+    goal: number;
+    status: "crushing" | "on_track" | "at_risk" | "slow_start";
+  }>;
+}
+
+interface BackendMemberCountUpdateResponse {
+  memberId: string;
+  applicationsCount: number;
+}
+
 class BackendUnavailableError extends Error {}
 
 const configuredStrategy = (import.meta.env.VITE_AUTH_STRATEGY as string | undefined)?.toLowerCase();
@@ -133,6 +160,29 @@ const configuredBackendAuthBaseUrl = (
 const backendAuthBaseUrl = configuredBackendAuthBaseUrl
   ? configuredBackendAuthBaseUrl.replace(/\/$/, "")
   : "";
+
+const localGoalStartDayToIndex: Record<GroupGoalStartDay, number> = {
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6
+};
+
+const localGroupSettingsOverride = new Map<
+  string,
+  {
+    goalCycle: "daily" | "weekly" | "biweekly";
+    goalStartDay: GroupGoalStartDay;
+    applicationGoal: number;
+    stakeUsd: number;
+    createdAt: string;
+  }
+>();
+
+const localManualCycleCounts = new Map<string, number>();
 
 function buildBackendUrl(path: string): string {
   return backendAuthBaseUrl ? `${backendAuthBaseUrl}${path}` : path;
@@ -179,6 +229,141 @@ function mapBackendPendingInvite(entry: BackendPendingInvite): PendingGroupInvit
     expiresAt: entry.expiresAt,
     createdAt: entry.createdAt
   };
+}
+
+function mapBackendGroupActivity(entry: BackendGroupActivitySnapshot): GroupActivitySnapshot {
+  return {
+    group: mapBackendGroupSummary(entry.group),
+    cycle: {
+      key: entry.cycle.key,
+      label: entry.cycle.label,
+      startsAt: entry.cycle.startsAt,
+      endsAt: entry.cycle.endsAt
+    },
+    members: entry.members.map((member) => ({
+      userId: member.userId,
+      name: member.name,
+      email: member.email,
+      role: member.role,
+      avatarUrl: member.avatarUrl,
+      isCurrentUser: Boolean(member.isCurrentUser),
+      applicationsCount: Math.max(0, Number(member.applicationsCount ?? 0)),
+      goal: Math.max(0, Number(member.goal ?? 0)),
+      status: member.status
+    }))
+  };
+}
+
+function startOfLocalDay(value: Date): Date {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate(), 0, 0, 0, 0);
+}
+
+function addDaysLocal(value: Date, days: number): Date {
+  const next = new Date(value);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function localDateYmd(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function localCalendarEpoch(value: Date): number {
+  return Date.UTC(value.getFullYear(), value.getMonth(), value.getDate());
+}
+
+function getLocalCycleWindow(input: {
+  goalCycle: "daily" | "weekly" | "biweekly";
+  goalStartDay: GroupGoalStartDay;
+  createdAt?: string;
+  now?: Date;
+}): {
+  key: string;
+  label: "day" | "week" | "biweekly";
+  startsAt: string;
+  endsAt: string;
+} {
+  const now = input.now ?? new Date();
+  const dayStart = startOfLocalDay(now);
+
+  if (input.goalCycle === "daily") {
+    const startsAt = dayStart;
+    const endsAt = addDaysLocal(startsAt, 1);
+    return {
+      key: `daily-${localDateYmd(startsAt)}`,
+      label: "day",
+      startsAt: startsAt.toISOString(),
+      endsAt: endsAt.toISOString()
+    };
+  }
+
+  const startDayIndex = localGoalStartDayToIndex[input.goalStartDay] ?? localGoalStartDayToIndex.monday;
+  const offset = (dayStart.getDay() - startDayIndex + 7) % 7;
+  let startsAt = addDaysLocal(dayStart, -offset);
+  let durationDays = 7;
+
+  if (input.goalCycle === "biweekly") {
+    const anchorDate = startOfLocalDay(new Date(input.createdAt ?? Date.now()));
+    const anchorOffset = (anchorDate.getDay() - startDayIndex + 7) % 7;
+    const anchorStart = addDaysLocal(anchorDate, -anchorOffset);
+    const weekDiff = Math.floor(
+      (localCalendarEpoch(startsAt) - localCalendarEpoch(anchorStart)) / (7 * 24 * 60 * 60 * 1000)
+    );
+    if (Math.abs(weekDiff % 2) === 1) {
+      startsAt = addDaysLocal(startsAt, -7);
+    }
+    durationDays = 14;
+  }
+
+  const endsAt = addDaysLocal(startsAt, durationDays);
+  return {
+    key: `${input.goalCycle}-${localDateYmd(startsAt)}`,
+    label: input.goalCycle === "weekly" ? "week" : "biweekly",
+    startsAt: startsAt.toISOString(),
+    endsAt: endsAt.toISOString()
+  };
+}
+
+function withLocalGroupOverrides(summary: MyGroupSummary): MyGroupSummary {
+  const override = localGroupSettingsOverride.get(summary.id);
+  if (!override) {
+    return summary;
+  }
+
+  return {
+    ...summary,
+    applicationGoal: override.applicationGoal,
+    weeklyGoal: override.applicationGoal,
+    stakeUsd: override.stakeUsd,
+    weeklyStakeUsd: override.stakeUsd,
+    goalCycle: override.goalCycle,
+    goalStartDay: override.goalStartDay,
+    createdAt: override.createdAt
+  };
+}
+
+function localCycleCountMapKey(groupId: string, cycleKey: string, userId: string): string {
+  return `${groupId}:${cycleKey}:${userId}`;
+}
+
+function statusFromCount(applicationsCount: number, goal: number): "crushing" | "on_track" | "at_risk" | "slow_start" {
+  if (goal <= 0) {
+    return "slow_start";
+  }
+  if (applicationsCount >= goal) {
+    return "crushing";
+  }
+  const ratio = applicationsCount / goal;
+  if (ratio >= 0.65) {
+    return "on_track";
+  }
+  if (applicationsCount <= 0) {
+    return "slow_start";
+  }
+  return "at_risk";
 }
 
 function withLatency<T>(value: T): Promise<T> {
@@ -605,7 +790,7 @@ function localGroupToSummary(group: Group): MyGroupSummary {
   const owner = getState().users.find((entry) => entry.id === group.ownerUserId);
   const ownerName = owner ? `${owner.firstName} ${owner.lastName}`.trim() : "Group Owner";
 
-  return {
+  const baseSummary: MyGroupSummary = {
     id: group.id,
     name: group.name,
     applicationGoal: group.weeklyGoal,
@@ -620,6 +805,48 @@ function localGroupToSummary(group: Group): MyGroupSummary {
     inviteCode: group.inviteCode,
     inviteCodeExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
     createdAt: new Date().toISOString()
+  };
+
+  return withLocalGroupOverrides(baseSummary);
+}
+
+function buildLocalGroupActivity(groupId: string): GroupActivitySnapshot {
+  const state = getState();
+  const summary = localGroupToSummary(state.group);
+  if (summary.id !== groupId) {
+    throw new Error("Group not found.");
+  }
+
+  const cycle = getLocalCycleWindow({
+    goalCycle: summary.goalCycle,
+    goalStartDay: summary.goalStartDay,
+    createdAt: summary.createdAt
+  });
+
+  const members = state.users
+    .filter((user) => state.group.memberIds.includes(user.id))
+    .map((user) => {
+      const count = localManualCycleCounts.get(localCycleCountMapKey(groupId, cycle.key, user.id)) ?? 0;
+      const isAdmin = user.id === summary.ownerUserId || user.role === "owner" || user.role === "admin";
+      const memberRole: "admin" | "member" = isAdmin ? "admin" : "member";
+      const name = `${user.firstName} ${user.lastName}`.trim() || user.email;
+      return {
+        userId: user.id,
+        name,
+        email: user.email,
+        role: memberRole,
+        avatarUrl: user.avatarUrl,
+        isCurrentUser: user.id === state.session?.userId,
+        applicationsCount: count,
+        goal: summary.applicationGoal,
+        status: statusFromCount(count, summary.applicationGoal)
+      };
+    });
+
+  return {
+    group: summary,
+    cycle,
+    members
   };
 }
 
@@ -1036,10 +1263,32 @@ const groupService: GroupService = {
     }
   },
 
+  async getGroupActivity(groupId) {
+    if (!backendAuthEnabled()) {
+      return withLatency(buildLocalGroupActivity(groupId));
+    }
+
+    try {
+      const payload = await backendRequest<BackendGroupActivitySnapshot>(
+        `/api/groups/${groupId}/activity`,
+        {
+          method: "GET"
+        }
+      );
+      return withLatency(mapBackendGroupActivity(payload));
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        return withLatency(buildLocalGroupActivity(groupId));
+      }
+      throw error;
+    }
+  },
+
   async createGroup(input) {
     if (!backendAuthEnabled()) {
       const code = (input.inviteCode?.trim() || "").toUpperCase() ||
         `SQ-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+      const createdAt = new Date().toISOString();
       const next = updateState((current) => ({
         ...current,
         group: {
@@ -1050,6 +1299,13 @@ const groupService: GroupService = {
           inviteCode: code
         }
       }));
+      localGroupSettingsOverride.set(next.group.id, {
+        goalCycle: input.goalCycle,
+        goalStartDay: input.goalStartDay,
+        applicationGoal: input.applicationGoal,
+        stakeUsd: input.stakeUsd,
+        createdAt
+      });
 
       return withLatency({
         group: localGroupToSummary(next.group),
@@ -1070,6 +1326,7 @@ const groupService: GroupService = {
       if (shouldFallbackToMock(error)) {
         const code = (input.inviteCode?.trim() || "").toUpperCase() ||
           `SQ-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+        const createdAt = new Date().toISOString();
         const next = updateState((current) => ({
           ...current,
           group: {
@@ -1080,6 +1337,13 @@ const groupService: GroupService = {
             inviteCode: code
           }
         }));
+        localGroupSettingsOverride.set(next.group.id, {
+          goalCycle: input.goalCycle,
+          goalStartDay: input.goalStartDay,
+          applicationGoal: input.applicationGoal,
+          stakeUsd: input.stakeUsd,
+          createdAt
+        });
 
         return withLatency({
           group: localGroupToSummary(next.group),
@@ -1157,6 +1421,14 @@ const groupService: GroupService = {
           }
         }
       }));
+      const existing = localGroupSettingsOverride.get(input.groupId);
+      localGroupSettingsOverride.set(input.groupId, {
+        goalCycle: input.goalCycle,
+        goalStartDay: input.goalStartDay,
+        applicationGoal: input.applicationGoal,
+        stakeUsd: input.stakeUsd,
+        createdAt: existing?.createdAt ?? new Date().toISOString()
+      });
       return withLatency(localGroupToSummary(next.group));
     }
 
@@ -1187,6 +1459,14 @@ const groupService: GroupService = {
             }
           }
         }));
+        const existing = localGroupSettingsOverride.get(input.groupId);
+        localGroupSettingsOverride.set(input.groupId, {
+          goalCycle: input.goalCycle,
+          goalStartDay: input.goalStartDay,
+          applicationGoal: input.applicationGoal,
+          stakeUsd: input.stakeUsd,
+          createdAt: existing?.createdAt ?? new Date().toISOString()
+        });
         return withLatency(localGroupToSummary(next.group));
       }
       throw error;
@@ -1335,6 +1615,88 @@ const groupService: GroupService = {
     }));
 
     return withLatency(next.group);
+  },
+
+  async updateMemberApplicationCount(input) {
+    if (!backendAuthEnabled()) {
+      const session = getCurrentSession();
+      if (session.userId !== input.memberId) {
+        throw new Error("You can only update your own application count.");
+      }
+      const activity = buildLocalGroupActivity(input.groupId);
+      const target = activity.members.find((member) => member.userId === input.memberId);
+      if (!target) {
+        throw new Error("Member not found in this group.");
+      }
+
+      const hasAbsolute = Number.isFinite(Number(input.applicationsCount));
+      const hasDelta = Number.isFinite(Number(input.delta));
+      if (!hasAbsolute && !hasDelta) {
+        throw new Error("Provide either applicationsCount or delta.");
+      }
+
+      const nextValue = hasAbsolute
+        ? Math.max(0, Math.floor(Number(input.applicationsCount)))
+        : Math.max(0, target.applicationsCount + Math.floor(Number(input.delta)));
+      localManualCycleCounts.set(
+        localCycleCountMapKey(input.groupId, activity.cycle.key, input.memberId),
+        nextValue
+      );
+
+      return withLatency({
+        memberId: input.memberId,
+        applicationsCount: nextValue
+      });
+    }
+
+    try {
+      const payload = await backendRequest<BackendMemberCountUpdateResponse>(
+        `/api/groups/${input.groupId}/members/${input.memberId}/count`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            delta: input.delta,
+            applicationsCount: input.applicationsCount
+          })
+        }
+      );
+      return withLatency({
+        memberId: payload.memberId,
+        applicationsCount: Math.max(0, Number(payload.applicationsCount ?? 0))
+      });
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        const session = getCurrentSession();
+        if (session.userId !== input.memberId) {
+          throw new Error("You can only update your own application count.");
+        }
+        const activity = buildLocalGroupActivity(input.groupId);
+        const target = activity.members.find((member) => member.userId === input.memberId);
+        if (!target) {
+          throw new Error("Member not found in this group.");
+        }
+
+        const hasAbsolute = Number.isFinite(Number(input.applicationsCount));
+        const hasDelta = Number.isFinite(Number(input.delta));
+        if (!hasAbsolute && !hasDelta) {
+          throw new Error("Provide either applicationsCount or delta.");
+        }
+
+        const nextValue = hasAbsolute
+          ? Math.max(0, Math.floor(Number(input.applicationsCount)))
+          : Math.max(0, target.applicationsCount + Math.floor(Number(input.delta)));
+        localManualCycleCounts.set(
+          localCycleCountMapKey(input.groupId, activity.cycle.key, input.memberId),
+          nextValue
+        );
+
+        return withLatency({
+          memberId: input.memberId,
+          applicationsCount: nextValue
+        });
+      }
+      throw error;
+    }
   },
 
   async joinWithInviteCode(inviteCode) {

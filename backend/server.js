@@ -67,7 +67,18 @@ const ALLOWED_GOAL_START_DAYS = new Set([
   "friday",
   "saturday"
 ]);
+const GOAL_START_DAY_TO_INDEX = {
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6
+};
 const UTC_ISO_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+let memberCycleCountsStoreMode = "database";
+const volatileMemberCycleCounts = new Map();
 const entraConfiguredExplicitly = Boolean(
   ENTRA_CLIENT_ID || ENTRA_CLIENT_SECRET || ENTRA_REDIRECT_URI || ENTRA_DISCOVERY_URL
 );
@@ -81,6 +92,49 @@ class HttpError extends Error {
     this.name = "HttpError";
     this.statusCode = statusCode;
   }
+}
+
+function memberCycleCountKey(groupId, cycleKey, userId) {
+  return `${groupId}:${cycleKey}:${userId}`;
+}
+
+function buildVolatileCycleCountMap(groupId, cycleKey) {
+  const prefix = `${groupId}:${cycleKey}:`;
+  const counts = new Map();
+
+  for (const [key, value] of volatileMemberCycleCounts.entries()) {
+    if (!key.startsWith(prefix)) {
+      continue;
+    }
+    const userId = key.slice(prefix.length);
+    counts.set(userId, Math.max(0, Number(value ?? 0)));
+  }
+
+  return counts;
+}
+
+function setVolatileCycleCount(groupId, userId, cycleKey, applicationsCount) {
+  const normalized = Math.max(0, Math.floor(Number(applicationsCount) || 0));
+  volatileMemberCycleCounts.set(memberCycleCountKey(groupId, cycleKey, userId), normalized);
+  return normalized;
+}
+
+function getVolatileCycleCount(groupId, userId, cycleKey) {
+  return Math.max(
+    0,
+    Number(volatileMemberCycleCounts.get(memberCycleCountKey(groupId, cycleKey, userId)) ?? 0)
+  );
+}
+
+function disablePersistentMemberCycleCounts(reason) {
+  if (memberCycleCountsStoreMode === "volatile") {
+    return;
+  }
+  memberCycleCountsStoreMode = "volatile";
+  const message = reason instanceof Error ? reason.message : String(reason ?? "unknown error");
+  console.warn(
+    `Persistent group_member_cycle_counts disabled for this process. Falling back to in-memory counts. ${message}`
+  );
 }
 
 function createInMemoryPool() {
@@ -149,8 +203,16 @@ async function createMySqlPool(connectionString) {
 
   return {
     async query(sql, params = []) {
-      const mysqlSql = sql.replace(/\$\d+/g, "?");
-      const mysqlParams = params.map((value) => normalizeMySqlParamValue(value));
+      const orderedParams = [];
+      const mysqlSql = sql.replace(/\$(\d+)/g, (_, groupIndex) => {
+        const zeroBasedIndex = Number(groupIndex) - 1;
+        orderedParams.push(normalizeMySqlParamValue(params[zeroBasedIndex]));
+        return "?";
+      });
+      const mysqlParams =
+        orderedParams.length > 0
+          ? orderedParams
+          : params.map((value) => normalizeMySqlParamValue(value));
       const [rows] = await mysqlPool.query(mysqlSql, mysqlParams);
 
       if (Array.isArray(rows)) {
@@ -406,6 +468,25 @@ async function initDb() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
+    try {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS group_member_cycle_counts (
+          group_id VARCHAR(191) NOT NULL,
+          user_id VARCHAR(191) NOT NULL,
+          cycle_key VARCHAR(64) NOT NULL,
+          applications_count INT NOT NULL DEFAULT 0,
+          updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (group_id, user_id, cycle_key),
+          CONSTRAINT fk_group_member_cycle_counts_group
+            FOREIGN KEY (group_id) REFERENCES app_groups(id) ON DELETE CASCADE,
+          CONSTRAINT fk_group_member_cycle_counts_user
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      `);
+    } catch (error) {
+      disablePersistentMemberCycleCounts(error);
+    }
+
     const goalCycleColumn = await pool.query(`
       SELECT COUNT(*) AS count
       FROM information_schema.columns
@@ -518,6 +599,21 @@ async function initDb() {
     );
   `);
 
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS group_member_cycle_counts (
+        group_id TEXT NOT NULL REFERENCES app_groups(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        cycle_key TEXT NOT NULL,
+        applications_count INT NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (group_id, user_id, cycle_key)
+      );
+    `);
+  } catch (error) {
+    disablePersistentMemberCycleCounts(error);
+  }
+
   await pool.query(`
     CREATE INDEX IF NOT EXISTS group_members_user_idx
     ON group_members(user_id);
@@ -527,6 +623,17 @@ async function initDb() {
     CREATE INDEX IF NOT EXISTS group_invites_recipient_status_idx
     ON group_invites(recipient_email, status);
   `);
+
+  if (memberCycleCountsStoreMode === "database") {
+    try {
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS group_member_cycle_counts_group_cycle_idx
+        ON group_member_cycle_counts(group_id, cycle_key);
+      `);
+    } catch (error) {
+      disablePersistentMemberCycleCounts(error);
+    }
+  }
 }
 
 function isValidEmail(email) {
@@ -658,6 +765,84 @@ function asIsoTimestamp(value) {
   }
 
   return new Date().toISOString();
+}
+
+function startOfLocalDay(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+}
+
+function addDaysLocal(value, days) {
+  const next = new Date(value);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function localDateYmd(value) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function localCalendarEpoch(value) {
+  return Date.UTC(value.getFullYear(), value.getMonth(), value.getDate());
+}
+
+function cycleLabelForGoalCycle(goalCycle) {
+  if (goalCycle === "daily") {
+    return "day";
+  }
+  if (goalCycle === "biweekly") {
+    return "biweekly";
+  }
+  return "week";
+}
+
+function getCycleWindowForGroup(groupRow, referenceDate = new Date()) {
+  const goalCycle = normalizeGoalCycle(groupRow.goal_cycle);
+  const goalStartDay = normalizeGoalStartDay(groupRow.goal_start_day);
+  const now = new Date(referenceDate);
+  const dayStart = startOfLocalDay(now);
+
+  if (goalCycle === "daily") {
+    const startsAt = dayStart;
+    const endsAt = addDaysLocal(startsAt, 1);
+    return {
+      goalCycle,
+      label: cycleLabelForGoalCycle(goalCycle),
+      startsAt,
+      endsAt,
+      cycleKey: `daily-${localDateYmd(startsAt)}`
+    };
+  }
+
+  const startDayIndex = GOAL_START_DAY_TO_INDEX[goalStartDay] ?? GOAL_START_DAY_TO_INDEX.monday;
+  const dayOffset = (dayStart.getDay() - startDayIndex + 7) % 7;
+  let startsAt = addDaysLocal(dayStart, -dayOffset);
+  let durationDays = 7;
+
+  if (goalCycle === "biweekly") {
+    const anchorBase = startOfLocalDay(new Date(groupRow.created_at ?? Date.now()));
+    const anchorOffset = (anchorBase.getDay() - startDayIndex + 7) % 7;
+    const anchorStart = addDaysLocal(anchorBase, -anchorOffset);
+    const weekDiff = Math.floor(
+      (localCalendarEpoch(startsAt) - localCalendarEpoch(anchorStart)) / (7 * 24 * 60 * 60 * 1000)
+    );
+    if (Math.abs(weekDiff % 2) === 1) {
+      startsAt = addDaysLocal(startsAt, -7);
+    }
+    durationDays = 14;
+  }
+
+  const endsAt = addDaysLocal(startsAt, durationDays);
+  return {
+    goalCycle,
+    label: cycleLabelForGoalCycle(goalCycle),
+    startsAt,
+    endsAt,
+    cycleKey: `${goalCycle}-${localDateYmd(startsAt)}`
+  };
 }
 
 function nowPlusInviteExpiryDate() {
@@ -865,6 +1050,204 @@ async function getGroupMemberRole(groupId, userId) {
     return "member";
   }
   return null;
+}
+
+async function isMemberInGroup(groupId, userId) {
+  const result = await pool.query(
+    `
+      SELECT 1
+      FROM group_members
+      WHERE group_id = $1
+        AND user_id = $2
+      LIMIT 1
+    `,
+    [groupId, userId]
+  );
+  return result.rows.length > 0;
+}
+
+async function getGroupMembersWithProfiles(groupId) {
+  const result = await pool.query(
+    `
+      SELECT
+        gm.user_id,
+        gm.role,
+        gm.joined_at,
+        u.first_name,
+        u.last_name,
+        u.email,
+        u.avatar_url
+      FROM group_members gm
+      INNER JOIN users u
+        ON u.id = gm.user_id
+      WHERE gm.group_id = $1
+      ORDER BY gm.joined_at ASC
+    `,
+    [groupId]
+  );
+  return result.rows;
+}
+
+async function getCycleCountsForGroup(groupId, cycleKey) {
+  if (memberCycleCountsStoreMode !== "database") {
+    return buildVolatileCycleCountMap(groupId, cycleKey);
+  }
+
+  try {
+    const result = await pool.query(
+      `
+        SELECT user_id, applications_count
+        FROM group_member_cycle_counts
+        WHERE group_id = $1
+          AND cycle_key = $2
+      `,
+      [groupId, cycleKey]
+    );
+
+    return new Map(
+      result.rows.map((row) => [String(row.user_id), Math.max(0, Number(row.applications_count ?? 0))])
+    );
+  } catch (error) {
+    disablePersistentMemberCycleCounts(error);
+    return buildVolatileCycleCountMap(groupId, cycleKey);
+  }
+}
+
+function statusFromApplications(applicationsCount, goal) {
+  if (!Number.isFinite(goal) || goal <= 0) {
+    return "slow_start";
+  }
+  if (applicationsCount >= goal) {
+    return "crushing";
+  }
+  const ratio = applicationsCount / goal;
+  if (ratio >= 0.65) {
+    return "on_track";
+  }
+  if (applicationsCount <= 0) {
+    return "slow_start";
+  }
+  return "at_risk";
+}
+
+async function getCurrentCycleGroupActivity(groupId, currentUserId) {
+  const group = await getGroupByIdForMember(groupId, currentUserId);
+  if (!group) {
+    return null;
+  }
+
+  const cycle = getCycleWindowForGroup(group, new Date());
+  const members = await getGroupMembersWithProfiles(groupId);
+  const countsByUserId = await getCycleCountsForGroup(groupId, cycle.cycleKey);
+  const goal = Number(group.weekly_goal ?? 0);
+
+  return {
+    group: toGroupSummary(group),
+    cycle: {
+      key: cycle.cycleKey,
+      label: cycle.label,
+      startsAt: cycle.startsAt.toISOString(),
+      endsAt: cycle.endsAt.toISOString()
+    },
+    members: members.map((member) => {
+      const firstName = String(member.first_name ?? "").trim();
+      const lastName = String(member.last_name ?? "").trim();
+      const fullName = [firstName, lastName].filter(Boolean).join(" ").trim() || member.email;
+      const applicationsCount = countsByUserId.get(String(member.user_id)) ?? 0;
+      const normalizedRole = String(member.role ?? "").trim().toLowerCase();
+      const role = normalizedRole === "admin" || normalizedRole === "owner" ? "admin" : "member";
+
+      return {
+        userId: String(member.user_id),
+        name: fullName,
+        email: String(member.email ?? ""),
+        role,
+        avatarUrl: member.avatar_url ?? null,
+        isCurrentUser: String(member.user_id) === currentUserId,
+        applicationsCount,
+        goal,
+        status: statusFromApplications(applicationsCount, goal)
+      };
+    })
+  };
+}
+
+async function getMemberCycleCount(groupId, userId, cycleKey) {
+  if (memberCycleCountsStoreMode !== "database") {
+    return getVolatileCycleCount(groupId, userId, cycleKey);
+  }
+
+  try {
+    const result = await pool.query(
+      `
+        SELECT applications_count
+        FROM group_member_cycle_counts
+        WHERE group_id = $1
+          AND user_id = $2
+          AND cycle_key = $3
+        LIMIT 1
+      `,
+      [groupId, userId, cycleKey]
+    );
+    return Math.max(0, Number(result.rows[0]?.applications_count ?? 0));
+  } catch (error) {
+    disablePersistentMemberCycleCounts(error);
+    return getVolatileCycleCount(groupId, userId, cycleKey);
+  }
+}
+
+async function setMemberCycleCount(groupId, userId, cycleKey, applicationsCount) {
+  const nextValue = Math.max(0, Math.floor(Number(applicationsCount) || 0));
+  if (memberCycleCountsStoreMode !== "database") {
+    return setVolatileCycleCount(groupId, userId, cycleKey, nextValue);
+  }
+
+  try {
+    const existing = await pool.query(
+      `
+        SELECT 1
+        FROM group_member_cycle_counts
+        WHERE group_id = $1
+          AND user_id = $2
+          AND cycle_key = $3
+        LIMIT 1
+      `,
+      [groupId, userId, cycleKey]
+    );
+
+    if (existing.rows.length) {
+      await pool.query(
+        `
+          UPDATE group_member_cycle_counts
+          SET applications_count = $4,
+              updated_at = NOW()
+          WHERE group_id = $1
+            AND user_id = $2
+            AND cycle_key = $3
+        `,
+        [groupId, userId, cycleKey, nextValue]
+      );
+      return nextValue;
+    }
+
+    await pool.query(
+      `
+        INSERT INTO group_member_cycle_counts (
+          group_id,
+          user_id,
+          cycle_key,
+          applications_count,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, NOW())
+      `,
+      [groupId, userId, cycleKey, nextValue]
+    );
+    return nextValue;
+  } catch (error) {
+    disablePersistentMemberCycleCounts(error);
+    return setVolatileCycleCount(groupId, userId, cycleKey, nextValue);
+  }
 }
 
 async function createEmailUser({ email, password, firstName, lastName }) {
@@ -2563,6 +2946,95 @@ app.delete("/api/groups/:groupId", authMiddleware, async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       error: error instanceof Error ? error.message : "Unable to delete group."
+    });
+  }
+});
+
+app.get("/api/groups/:groupId/activity", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    if (!userId) {
+      return res.status(401).json({ error: "Missing user identity." });
+    }
+
+    const groupId = String(req.params.groupId ?? "").trim();
+    if (!groupId) {
+      return res.status(400).json({ error: "Group id is required." });
+    }
+
+    const activity = await getCurrentCycleGroupActivity(groupId, userId);
+    if (!activity) {
+      return res.status(404).json({ error: "Group not found." });
+    }
+
+    return res.status(200).json(activity);
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to fetch group activity."
+    });
+  }
+});
+
+app.patch("/api/groups/:groupId/members/:memberId/count", authMiddleware, async (req, res) => {
+  try {
+    const requesterUserId = req.auth?.sub;
+    if (!requesterUserId) {
+      return res.status(401).json({ error: "Missing user identity." });
+    }
+
+    const groupId = String(req.params.groupId ?? "").trim();
+    const memberId = String(req.params.memberId ?? "").trim();
+    if (!groupId || !memberId) {
+      return res.status(400).json({ error: "Group id and member id are required." });
+    }
+
+    const requesterRole = await getGroupMemberRole(groupId, requesterUserId);
+    if (!requesterRole) {
+      return res.status(404).json({ error: "Group not found." });
+    }
+
+    const canEditTarget = requesterUserId === memberId;
+    if (!canEditTarget) {
+      return res.status(403).json({ error: "You can only update your own application count." });
+    }
+
+    const memberExists = await isMemberInGroup(groupId, memberId);
+    if (!memberExists) {
+      return res.status(404).json({ error: "Member not found in this group." });
+    }
+
+    const group = await getGroupByIdForMember(groupId, requesterUserId);
+    if (!group) {
+      return res.status(404).json({ error: "Group not found." });
+    }
+
+    const cycle = getCycleWindowForGroup(group, new Date());
+    const hasAbsoluteCount = Number.isFinite(Number(req.body?.applicationsCount));
+    const hasDelta = Number.isFinite(Number(req.body?.delta));
+    if (!hasAbsoluteCount && !hasDelta) {
+      return res.status(400).json({ error: "Provide either applicationsCount or delta." });
+    }
+
+    const currentValue = await getMemberCycleCount(groupId, memberId, cycle.cycleKey);
+    const nextValue = hasAbsoluteCount
+      ? Math.max(0, Math.floor(Number(req.body?.applicationsCount)))
+      : Math.max(0, currentValue + Math.floor(Number(req.body?.delta)));
+
+    const saved = await setMemberCycleCount(groupId, memberId, cycle.cycleKey, nextValue);
+
+    return res.status(200).json({
+      memberId,
+      applicationsCount: saved,
+      cycle: {
+        key: cycle.cycleKey,
+        label: cycle.label,
+        startsAt: cycle.startsAt.toISOString(),
+        endsAt: cycle.endsAt.toISOString()
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to update member application count."
     });
   }
 });
