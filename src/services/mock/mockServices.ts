@@ -29,6 +29,14 @@ import type {
 import { calculateSettlement } from "../../utils/settlement";
 import { getWeekWindow } from "../../utils/week";
 import { maskRouting } from "../../utils/format";
+import {
+  addUtcCalendarDays,
+  APP_TIME_ZONE,
+  toUtcCalendarDate,
+  utcCalendarDateYmd,
+  utcCalendarEpoch,
+  zonedLocalToUtc
+} from "../../utils/timezone";
 
 const simulatedLatencyMs = 120;
 const backendTokenStorageKey = "incentapply_backend_token";
@@ -254,27 +262,6 @@ function mapBackendGroupActivity(entry: BackendGroupActivitySnapshot): GroupActi
   };
 }
 
-function startOfLocalDay(value: Date): Date {
-  return new Date(value.getFullYear(), value.getMonth(), value.getDate(), 0, 0, 0, 0);
-}
-
-function addDaysLocal(value: Date, days: number): Date {
-  const next = new Date(value);
-  next.setDate(next.getDate() + days);
-  return next;
-}
-
-function localDateYmd(value: Date): string {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, "0");
-  const day = String(value.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function localCalendarEpoch(value: Date): number {
-  return Date.UTC(value.getFullYear(), value.getMonth(), value.getDate());
-}
-
 function getLocalCycleWindow(input: {
   goalCycle: "daily" | "weekly" | "biweekly";
   goalStartDay: GroupGoalStartDay;
@@ -286,14 +273,32 @@ function getLocalCycleWindow(input: {
   startsAt: string;
   endsAt: string;
 } {
+  const timezone = APP_TIME_ZONE;
   const now = input.now ?? new Date();
-  const dayStart = startOfLocalDay(now);
+  const localCalendarDay = toUtcCalendarDate(now, timezone);
 
   if (input.goalCycle === "daily") {
-    const startsAt = dayStart;
-    const endsAt = addDaysLocal(startsAt, 1);
+    const startsAt = zonedLocalToUtc(
+      localCalendarDay.getUTCFullYear(),
+      localCalendarDay.getUTCMonth() + 1,
+      localCalendarDay.getUTCDate(),
+      0,
+      0,
+      0,
+      timezone
+    );
+    const endLocalCalendar = addUtcCalendarDays(localCalendarDay, 1);
+    const endsAt = zonedLocalToUtc(
+      endLocalCalendar.getUTCFullYear(),
+      endLocalCalendar.getUTCMonth() + 1,
+      endLocalCalendar.getUTCDate(),
+      0,
+      0,
+      0,
+      timezone
+    );
     return {
-      key: `daily-${localDateYmd(startsAt)}`,
+      key: `daily-${utcCalendarDateYmd(localCalendarDay)}`,
       label: "day",
       startsAt: startsAt.toISOString(),
       endsAt: endsAt.toISOString()
@@ -301,26 +306,45 @@ function getLocalCycleWindow(input: {
   }
 
   const startDayIndex = localGoalStartDayToIndex[input.goalStartDay] ?? localGoalStartDayToIndex.monday;
-  const offset = (dayStart.getDay() - startDayIndex + 7) % 7;
-  let startsAt = addDaysLocal(dayStart, -offset);
+  const offset = (localCalendarDay.getUTCDay() - startDayIndex + 7) % 7;
+  let startsAtLocalCalendar = addUtcCalendarDays(localCalendarDay, -offset);
   let durationDays = 7;
 
   if (input.goalCycle === "biweekly") {
-    const anchorDate = startOfLocalDay(new Date(input.createdAt ?? Date.now()));
-    const anchorOffset = (anchorDate.getDay() - startDayIndex + 7) % 7;
-    const anchorStart = addDaysLocal(anchorDate, -anchorOffset);
+    const anchorDate = toUtcCalendarDate(new Date(input.createdAt ?? Date.now()), timezone);
+    const anchorOffset = (anchorDate.getUTCDay() - startDayIndex + 7) % 7;
+    const anchorStart = addUtcCalendarDays(anchorDate, -anchorOffset);
     const weekDiff = Math.floor(
-      (localCalendarEpoch(startsAt) - localCalendarEpoch(anchorStart)) / (7 * 24 * 60 * 60 * 1000)
+      (utcCalendarEpoch(startsAtLocalCalendar) - utcCalendarEpoch(anchorStart)) /
+        (7 * 24 * 60 * 60 * 1000)
     );
     if (Math.abs(weekDiff % 2) === 1) {
-      startsAt = addDaysLocal(startsAt, -7);
+      startsAtLocalCalendar = addUtcCalendarDays(startsAtLocalCalendar, -7);
     }
     durationDays = 14;
   }
 
-  const endsAt = addDaysLocal(startsAt, durationDays);
+  const endsAtLocalCalendar = addUtcCalendarDays(startsAtLocalCalendar, durationDays);
+  const startsAt = zonedLocalToUtc(
+    startsAtLocalCalendar.getUTCFullYear(),
+    startsAtLocalCalendar.getUTCMonth() + 1,
+    startsAtLocalCalendar.getUTCDate(),
+    0,
+    0,
+    0,
+    timezone
+  );
+  const endsAt = zonedLocalToUtc(
+    endsAtLocalCalendar.getUTCFullYear(),
+    endsAtLocalCalendar.getUTCMonth() + 1,
+    endsAtLocalCalendar.getUTCDate(),
+    0,
+    0,
+    0,
+    timezone
+  );
   return {
-    key: `${input.goalCycle}-${localDateYmd(startsAt)}`,
+    key: `${input.goalCycle}-${utcCalendarDateYmd(startsAtLocalCalendar)}`,
     label: input.goalCycle === "weekly" ? "week" : "biweekly",
     startsAt: startsAt.toISOString(),
     endsAt: endsAt.toISOString()

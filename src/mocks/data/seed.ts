@@ -14,8 +14,9 @@ import type {
 } from "../../domain/types";
 import { calculateSettlement } from "../../utils/settlement";
 import { getWeekWindow } from "../../utils/week";
+import { APP_TIME_ZONE } from "../../utils/timezone";
 
-const timezone = "America/New_York";
+const timezone = APP_TIME_ZONE;
 
 const platformConfig: PlatformConfig = {
   currency: "USD",
@@ -126,9 +127,7 @@ const group: Group = {
 };
 
 function isoOffset(base: Date, days: number, minutes: number): string {
-  const value = new Date(base);
-  value.setDate(value.getDate() + days);
-  value.setMinutes(value.getMinutes() + minutes);
+  const value = new Date(base.getTime() + days * 24 * 60 * 60 * 1000 + minutes * 60 * 1000);
   return value.toISOString();
 }
 

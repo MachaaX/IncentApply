@@ -1,14 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useJoinGroup, usePendingInvites, useRespondToInvite } from "../hooks/useAppQueries";
-
-function formatDateLabel(value: string): string {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toLocaleString();
-}
+import { dateTimeWithYearLabel } from "../utils/format";
 
 export function MyGroupsJoinPage() {
   const navigate = useNavigate();
@@ -152,7 +145,8 @@ export function MyGroupsJoinPage() {
                         <span className="text-[#92c9b7]">${invite.stakeUsd}</span>
                       </p>
                       <p className="text-xs text-[#64877a]">
-                        Expires: <span className="text-[#92c9b7]">{formatDateLabel(invite.expiresAt)}</span>
+                        Expires:{" "}
+                        <span className="text-[#92c9b7]">{dateTimeWithYearLabel(invite.expiresAt)}</span>
                       </p>
                     </div>
 

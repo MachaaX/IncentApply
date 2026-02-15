@@ -76,6 +76,7 @@ const GOAL_START_DAY_TO_INDEX = {
   friday: 5,
   saturday: 6
 };
+const APP_TIME_ZONE = "America/New_York";
 const UTC_ISO_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 let memberCycleCountsStoreMode = "database";
 const volatileMemberCycleCounts = new Map();
@@ -767,26 +768,73 @@ function asIsoTimestamp(value) {
   return new Date().toISOString();
 }
 
-function startOfLocalDay(value) {
-  const date = value instanceof Date ? value : new Date(value);
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+function getZonedParts(date, timeZone = APP_TIME_ZONE) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  }).formatToParts(date);
+
+  const byType = (type) => {
+    const value = parts.find((part) => part.type === type)?.value;
+    return Number(value ?? 0);
+  };
+
+  return {
+    year: byType("year"),
+    month: byType("month"),
+    day: byType("day"),
+    hour: byType("hour"),
+    minute: byType("minute"),
+    second: byType("second")
+  };
 }
 
-function addDaysLocal(value, days) {
+function getOffsetMs(date, timeZone = APP_TIME_ZONE) {
+  const zoned = getZonedParts(date, timeZone);
+  const asUtc = Date.UTC(
+    zoned.year,
+    zoned.month - 1,
+    zoned.day,
+    zoned.hour,
+    zoned.minute,
+    zoned.second
+  );
+  return asUtc - date.getTime();
+}
+
+function zonedLocalToUtc(year, month, day, hour, minute, second, timeZone = APP_TIME_ZONE) {
+  const guess = Date.UTC(year, month - 1, day, hour, minute, second);
+  const offset = getOffsetMs(new Date(guess), timeZone);
+  return new Date(guess - offset);
+}
+
+function toUtcCalendarDate(value, timeZone = APP_TIME_ZONE) {
+  const date = value instanceof Date ? value : new Date(value);
+  const zoned = getZonedParts(date, timeZone);
+  return new Date(Date.UTC(zoned.year, zoned.month - 1, zoned.day));
+}
+
+function addUtcCalendarDays(value, days) {
   const next = new Date(value);
-  next.setDate(next.getDate() + days);
+  next.setUTCDate(next.getUTCDate() + days);
   return next;
 }
 
-function localDateYmd(value) {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, "0");
-  const day = String(value.getDate()).padStart(2, "0");
+function utcCalendarDateYmd(value) {
+  const year = value.getUTCFullYear();
+  const month = String(value.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(value.getUTCDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
-function localCalendarEpoch(value) {
-  return Date.UTC(value.getFullYear(), value.getMonth(), value.getDate());
+function utcCalendarEpoch(value) {
+  return Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate());
 }
 
 function cycleLabelForGoalCycle(goalCycle) {
@@ -802,46 +850,83 @@ function cycleLabelForGoalCycle(goalCycle) {
 function getCycleWindowForGroup(groupRow, referenceDate = new Date()) {
   const goalCycle = normalizeGoalCycle(groupRow.goal_cycle);
   const goalStartDay = normalizeGoalStartDay(groupRow.goal_start_day);
+  const timeZone = APP_TIME_ZONE;
   const now = new Date(referenceDate);
-  const dayStart = startOfLocalDay(now);
+  const localCalendarDay = toUtcCalendarDate(now, timeZone);
 
   if (goalCycle === "daily") {
-    const startsAt = dayStart;
-    const endsAt = addDaysLocal(startsAt, 1);
+    const startsAt = zonedLocalToUtc(
+      localCalendarDay.getUTCFullYear(),
+      localCalendarDay.getUTCMonth() + 1,
+      localCalendarDay.getUTCDate(),
+      0,
+      0,
+      0,
+      timeZone
+    );
+    const endLocalCalendar = addUtcCalendarDays(localCalendarDay, 1);
+    const endsAt = zonedLocalToUtc(
+      endLocalCalendar.getUTCFullYear(),
+      endLocalCalendar.getUTCMonth() + 1,
+      endLocalCalendar.getUTCDate(),
+      0,
+      0,
+      0,
+      timeZone
+    );
     return {
       goalCycle,
       label: cycleLabelForGoalCycle(goalCycle),
       startsAt,
       endsAt,
-      cycleKey: `daily-${localDateYmd(startsAt)}`
+      cycleKey: `daily-${utcCalendarDateYmd(localCalendarDay)}`
     };
   }
 
   const startDayIndex = GOAL_START_DAY_TO_INDEX[goalStartDay] ?? GOAL_START_DAY_TO_INDEX.monday;
-  const dayOffset = (dayStart.getDay() - startDayIndex + 7) % 7;
-  let startsAt = addDaysLocal(dayStart, -dayOffset);
+  const dayOffset = (localCalendarDay.getUTCDay() - startDayIndex + 7) % 7;
+  let startsAtLocalCalendar = addUtcCalendarDays(localCalendarDay, -dayOffset);
   let durationDays = 7;
 
   if (goalCycle === "biweekly") {
-    const anchorBase = startOfLocalDay(new Date(groupRow.created_at ?? Date.now()));
-    const anchorOffset = (anchorBase.getDay() - startDayIndex + 7) % 7;
-    const anchorStart = addDaysLocal(anchorBase, -anchorOffset);
+    const anchorBase = toUtcCalendarDate(new Date(groupRow.created_at ?? Date.now()), timeZone);
+    const anchorOffset = (anchorBase.getUTCDay() - startDayIndex + 7) % 7;
+    const anchorStart = addUtcCalendarDays(anchorBase, -anchorOffset);
     const weekDiff = Math.floor(
-      (localCalendarEpoch(startsAt) - localCalendarEpoch(anchorStart)) / (7 * 24 * 60 * 60 * 1000)
+      (utcCalendarEpoch(startsAtLocalCalendar) - utcCalendarEpoch(anchorStart)) /
+        (7 * 24 * 60 * 60 * 1000)
     );
     if (Math.abs(weekDiff % 2) === 1) {
-      startsAt = addDaysLocal(startsAt, -7);
+      startsAtLocalCalendar = addUtcCalendarDays(startsAtLocalCalendar, -7);
     }
     durationDays = 14;
   }
 
-  const endsAt = addDaysLocal(startsAt, durationDays);
+  const endsAtLocalCalendar = addUtcCalendarDays(startsAtLocalCalendar, durationDays);
+  const startsAt = zonedLocalToUtc(
+    startsAtLocalCalendar.getUTCFullYear(),
+    startsAtLocalCalendar.getUTCMonth() + 1,
+    startsAtLocalCalendar.getUTCDate(),
+    0,
+    0,
+    0,
+    timeZone
+  );
+  const endsAt = zonedLocalToUtc(
+    endsAtLocalCalendar.getUTCFullYear(),
+    endsAtLocalCalendar.getUTCMonth() + 1,
+    endsAtLocalCalendar.getUTCDate(),
+    0,
+    0,
+    0,
+    timeZone
+  );
   return {
     goalCycle,
     label: cycleLabelForGoalCycle(goalCycle),
     startsAt,
     endsAt,
-    cycleKey: `${goalCycle}-${localDateYmd(startsAt)}`
+    cycleKey: `${goalCycle}-${utcCalendarDateYmd(startsAtLocalCalendar)}`
   };
 }
 

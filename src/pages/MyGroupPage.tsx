@@ -9,7 +9,7 @@ import {
   useUpdateMemberApplicationCount
 } from "../hooks/useAppQueries";
 import type { GroupActivityMember, GroupGoalCycle, GroupGoalStartDay } from "../domain/types";
-import { centsToUsd } from "../utils/format";
+import { centsToUsd, dateTimeWithYearLabel } from "../utils/format";
 import { useAuth } from "../app/AuthContext";
 
 function initials(name: string): string {
@@ -81,14 +81,6 @@ function progressTextClass(status: GroupActivityMember["status"]): string {
     return "text-primary";
   }
   return "text-slate-300";
-}
-
-function formatDateLabel(value: string): string {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toLocaleString();
 }
 
 function splitRemaining(totalMs: number): { days: number; hours: number; minutes: number } {
@@ -376,7 +368,8 @@ export function MyGroupPage() {
             </p>
             <p className="mt-1 text-xs text-[#64877a]">
               Invite Code: <span className="font-semibold text-[#92c9b7]">{summary.inviteCode}</span> ·
-              Expires: <span className="text-[#92c9b7]">{formatDateLabel(summary.inviteCodeExpiresAt)}</span>
+              Expires:{" "}
+              <span className="text-[#92c9b7]">{dateTimeWithYearLabel(summary.inviteCodeExpiresAt)}</span>
             </p>
           </div>
           {isAdmin ? (
@@ -495,7 +488,7 @@ export function MyGroupPage() {
             <p className="text-sm text-[#92c9b7]">Only your personal counter is visible and editable.</p>
           </div>
           <p className="rounded-lg border border-primary/20 bg-primary/10 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-primary">
-            Cycle Ends {formatDateLabel(activitySnapshot.cycle.endsAt)}
+            Cycle Ends {dateTimeWithYearLabel(activitySnapshot.cycle.endsAt)}
           </p>
         </div>
         {currentMember ? (
@@ -636,7 +629,9 @@ export function MyGroupPage() {
               <span className="mt-1 block text-[10px] font-bold uppercase text-slate-500">Mins</span>
             </div>
           </div>
-          <p className="mt-3 text-xs text-slate-500">Resets at {formatDateLabel(activitySnapshot.cycle.endsAt)}</p>
+          <p className="mt-3 text-xs text-slate-500">
+            Resets at {dateTimeWithYearLabel(activitySnapshot.cycle.endsAt)}
+          </p>
         </article>
 
         <article className="rounded-2xl border border-primary/10 bg-[#162e25] p-6">
