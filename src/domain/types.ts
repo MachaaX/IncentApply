@@ -159,6 +159,23 @@ export interface ApplicationLog {
   isCounted: boolean;
 }
 
+export interface CounterApplicationLog {
+  id: string;
+  userId: string;
+  groupId: string;
+  groupName: string;
+  goalCycle: GroupGoalCycle;
+  goalStartDay: GroupGoalStartDay;
+  applicationGoal: number;
+  stakeUsd: number;
+  cycleKey: string;
+  cycleLabel: "day" | "week" | "biweekly";
+  cycleStartsAt: string;
+  cycleEndsAt: string;
+  applicationIndex: number;
+  loggedAt: string;
+}
+
 export interface GmailSyncState {
   userId: string;
   connected: boolean;
@@ -283,6 +300,7 @@ export interface MockState {
   wallets: Wallet[];
   gmailSyncStates: GmailSyncState[];
   applicationLogs: ApplicationLog[];
+  counterApplicationLogs: CounterApplicationLog[];
   settlementCycles: SettlementCycle[];
   settlementResults: SettlementResult[];
   activities: ActivityItem[];

@@ -1,5 +1,6 @@
 import type {
   ApplicationLog,
+  CounterApplicationLog,
   AuthProvider,
   AuthSession,
   BankAccount,
@@ -84,6 +85,7 @@ export interface GroupService {
 
 export interface ApplicationService {
   getCurrentWeekWindow(): Promise<WeekWindow>;
+  getCounterApplicationLogs(): Promise<CounterApplicationLog[]>;
   getLogsForWeek(weekId: string): Promise<ApplicationLog[]>;
   createManualLog(input: {
     company: string;

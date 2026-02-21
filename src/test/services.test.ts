@@ -58,6 +58,44 @@ describe("mock services", () => {
     expect(logs.some((log) => log.id === created.id)).toBe(false);
   });
 
+  it("creates immutable counter application logs when member count increases", async () => {
+    await services.authService.loginWithPassword("alex@incentapply.dev", "password123");
+    const before = await services.applicationService.getCounterApplicationLogs();
+
+    const updated = await services.groupService.updateMemberApplicationCount({
+      groupId: "group-1",
+      memberId: "user-alex",
+      delta: 1
+    });
+
+    const after = await services.applicationService.getCounterApplicationLogs();
+    expect(after.length).toBe(before.length + 1);
+    expect(after[0]?.groupId).toBe("group-1");
+    expect(after[0]?.applicationIndex).toBe(updated.applicationsCount);
+    expect(after[0]?.applicationGoal).toBeGreaterThan(0);
+  });
+
+  it("removes the most recent counter application log when member count decreases", async () => {
+    await services.authService.loginWithPassword("alex@incentapply.dev", "password123");
+
+    await services.groupService.updateMemberApplicationCount({
+      groupId: "group-1",
+      memberId: "user-alex",
+      delta: 1
+    });
+    const afterIncrease = await services.applicationService.getCounterApplicationLogs();
+    const newestAddedId = afterIncrease[0]?.id;
+    expect(newestAddedId).toBeDefined();
+
+    await services.groupService.updateMemberApplicationCount({
+      groupId: "group-1",
+      memberId: "user-alex",
+      delta: -1
+    });
+    const afterDecrease = await services.applicationService.getCounterApplicationLogs();
+    expect(afterDecrease.some((entry) => entry.id === newestAddedId)).toBe(false);
+  });
+
   it("creates a new account when a first-time user logs in with Google", async () => {
     const uniqueEmail = `first.timer.${Date.now()}@incentapply.dev`;
     const session = await services.authService.loginWithGoogle(uniqueEmail);

@@ -94,6 +94,15 @@ export function useWeekLogs(weekId?: string) {
   });
 }
 
+export function useCounterApplicationLogs() {
+  const { applicationService } = useServices();
+  return useQuery({
+    queryKey: ["counter-application-logs"],
+    queryFn: () => applicationService.getCounterApplicationLogs(),
+    refetchInterval: 5000
+  });
+}
+
 export function useGmailState() {
   const { applicationService } = useServices();
   return useQuery({
@@ -302,6 +311,7 @@ export function useUpdateMemberApplicationCount() {
     }) => groupService.updateMemberApplicationCount(input),
     onSuccess: (_, input) => {
       void queryClient.invalidateQueries({ queryKey: ["group-activity", input.groupId] });
+      void queryClient.invalidateQueries({ queryKey: ["counter-application-logs"] });
     }
   });
 }

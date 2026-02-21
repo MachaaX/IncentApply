@@ -488,6 +488,25 @@ async function initDb() {
       disablePersistentMemberCycleCounts(error);
     }
 
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS member_counter_application_logs (
+        id VARCHAR(191) PRIMARY KEY,
+        user_id VARCHAR(191) NOT NULL,
+        group_id_snapshot VARCHAR(191) NOT NULL,
+        group_name_snapshot VARCHAR(${GROUP_NAME_MAX_LENGTH}) NOT NULL,
+        goal_cycle_snapshot VARCHAR(16) NOT NULL,
+        goal_start_day_snapshot VARCHAR(16) NOT NULL,
+        application_goal_snapshot INT NOT NULL,
+        stake_usd_snapshot INT NOT NULL,
+        cycle_key_snapshot VARCHAR(64) NOT NULL,
+        cycle_label_snapshot VARCHAR(16) NOT NULL,
+        cycle_starts_at TIMESTAMP NOT NULL,
+        cycle_ends_at TIMESTAMP NOT NULL,
+        application_index INT NOT NULL,
+        logged_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
     const goalCycleColumn = await pool.query(`
       SELECT COUNT(*) AS count
       FROM information_schema.columns
@@ -616,6 +635,25 @@ async function initDb() {
   }
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS member_counter_application_logs (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      group_id_snapshot TEXT NOT NULL,
+      group_name_snapshot TEXT NOT NULL,
+      goal_cycle_snapshot TEXT NOT NULL,
+      goal_start_day_snapshot TEXT NOT NULL,
+      application_goal_snapshot INT NOT NULL,
+      stake_usd_snapshot INT NOT NULL,
+      cycle_key_snapshot TEXT NOT NULL,
+      cycle_label_snapshot TEXT NOT NULL,
+      cycle_starts_at TIMESTAMPTZ NOT NULL,
+      cycle_ends_at TIMESTAMPTZ NOT NULL,
+      application_index INT NOT NULL,
+      logged_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS group_members_user_idx
     ON group_members(user_id);
   `);
@@ -623,6 +661,11 @@ async function initDb() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS group_invites_recipient_status_idx
     ON group_invites(recipient_email, status);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS member_counter_application_logs_user_logged_idx
+    ON member_counter_application_logs(user_id, logged_at DESC);
   `);
 
   if (memberCycleCountsStoreMode === "database") {
@@ -987,6 +1030,32 @@ function toInviteView(row) {
   };
 }
 
+function toCounterApplicationLog(row) {
+  const goalCycle = normalizeGoalCycle(row.goal_cycle_snapshot);
+  const goalStartDay = normalizeGoalStartDay(row.goal_start_day_snapshot);
+  const cycleLabel =
+    row.cycle_label_snapshot === "day" || row.cycle_label_snapshot === "biweekly"
+      ? row.cycle_label_snapshot
+      : "week";
+
+  return {
+    id: String(row.id ?? ""),
+    userId: String(row.user_id ?? ""),
+    groupId: String(row.group_id_snapshot ?? ""),
+    groupName: String(row.group_name_snapshot ?? ""),
+    goalCycle,
+    goalStartDay,
+    applicationGoal: Math.max(0, Number(row.application_goal_snapshot ?? 0)),
+    stakeUsd: Math.max(0, Number(row.stake_usd_snapshot ?? 0)),
+    cycleKey: String(row.cycle_key_snapshot ?? ""),
+    cycleLabel,
+    cycleStartsAt: asIsoTimestamp(row.cycle_starts_at),
+    cycleEndsAt: asIsoTimestamp(row.cycle_ends_at),
+    applicationIndex: Math.max(0, Number(row.application_index ?? 0)),
+    loggedAt: asIsoTimestamp(row.logged_at)
+  };
+}
+
 function normalizeInviteEmails(value, currentUserEmail) {
   if (!Array.isArray(value)) {
     return [];
@@ -1333,6 +1402,158 @@ async function setMemberCycleCount(groupId, userId, cycleKey, applicationsCount)
     disablePersistentMemberCycleCounts(error);
     return setVolatileCycleCount(groupId, userId, cycleKey, nextValue);
   }
+}
+
+async function appendCounterApplicationLogs({
+  userId,
+  group,
+  cycle,
+  fromExclusive,
+  toInclusive
+}) {
+  const startValue = Math.max(0, Math.floor(Number(fromExclusive) || 0));
+  const endValue = Math.max(0, Math.floor(Number(toInclusive) || 0));
+  if (endValue <= startValue) {
+    return [];
+  }
+
+  const goalCycle = normalizeGoalCycle(group.goal_cycle);
+  const goalStartDay = normalizeGoalStartDay(group.goal_start_day);
+  const goalAtLogTime = Math.max(0, Number(group.weekly_goal ?? 0));
+  const stakeAtLogTime = Math.max(0, Number(group.weekly_stake_usd ?? 0));
+  const cycleStartsAt = asIsoTimestamp(cycle.startsAt);
+  const cycleEndsAt = asIsoTimestamp(cycle.endsAt);
+  const loggedAt = new Date().toISOString();
+  const inserted = [];
+
+  for (let index = startValue + 1; index <= endValue; index += 1) {
+    const id = randomUUID();
+    await pool.query(
+      `
+        INSERT INTO member_counter_application_logs (
+          id,
+          user_id,
+          group_id_snapshot,
+          group_name_snapshot,
+          goal_cycle_snapshot,
+          goal_start_day_snapshot,
+          application_goal_snapshot,
+          stake_usd_snapshot,
+          cycle_key_snapshot,
+          cycle_label_snapshot,
+          cycle_starts_at,
+          cycle_ends_at,
+          application_index,
+          logged_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      `,
+      [
+        id,
+        userId,
+        group.id,
+        group.name,
+        goalCycle,
+        goalStartDay,
+        goalAtLogTime,
+        stakeAtLogTime,
+        cycle.cycleKey,
+        cycle.label,
+        cycleStartsAt,
+        cycleEndsAt,
+        index,
+        loggedAt
+      ]
+    );
+    inserted.push({
+      id,
+      user_id: userId,
+      group_id_snapshot: group.id,
+      group_name_snapshot: group.name,
+      goal_cycle_snapshot: goalCycle,
+      goal_start_day_snapshot: goalStartDay,
+      application_goal_snapshot: goalAtLogTime,
+      stake_usd_snapshot: stakeAtLogTime,
+      cycle_key_snapshot: cycle.cycleKey,
+      cycle_label_snapshot: cycle.label,
+      cycle_starts_at: cycleStartsAt,
+      cycle_ends_at: cycleEndsAt,
+      application_index: index,
+      logged_at: loggedAt
+    });
+  }
+
+  return inserted.map((row) => toCounterApplicationLog(row));
+}
+
+async function listCounterApplicationLogsForUser(userId, limit = 500) {
+  const safeLimit = Math.max(1, Math.min(1000, Number(limit) || 500));
+  const result = await pool.query(
+    `
+      SELECT
+        id,
+        user_id,
+        group_id_snapshot,
+        group_name_snapshot,
+        goal_cycle_snapshot,
+        goal_start_day_snapshot,
+        application_goal_snapshot,
+        stake_usd_snapshot,
+        cycle_key_snapshot,
+        cycle_label_snapshot,
+        cycle_starts_at,
+        cycle_ends_at,
+        application_index,
+        logged_at
+      FROM member_counter_application_logs
+      WHERE user_id = $1
+      ORDER BY logged_at DESC, application_index DESC
+      LIMIT $2
+    `,
+    [userId, safeLimit]
+  );
+  return result.rows.map((row) => toCounterApplicationLog(row));
+}
+
+async function removeRecentCounterApplicationLogs({
+  userId,
+  groupId,
+  cycleKey,
+  count
+}) {
+  const removalCount = Math.max(0, Math.floor(Number(count) || 0));
+  if (removalCount <= 0) {
+    return 0;
+  }
+
+  const toDelete = await pool.query(
+    `
+      SELECT id
+      FROM member_counter_application_logs
+      WHERE user_id = $1
+        AND group_id_snapshot = $2
+        AND cycle_key_snapshot = $3
+      ORDER BY logged_at DESC, application_index DESC
+      LIMIT $4
+    `,
+    [userId, groupId, cycleKey, removalCount]
+  );
+
+  const ids = toDelete.rows
+    .map((row) => String(row.id ?? "").trim())
+    .filter((value) => value.length > 0);
+
+  for (const id of ids) {
+    await pool.query(
+      `
+        DELETE FROM member_counter_application_logs
+        WHERE id = $1
+      `,
+      [id]
+    );
+  }
+
+  return ids.length;
 }
 
 async function createEmailUser({ email, password, firstName, lastName }) {
@@ -3092,6 +3313,22 @@ app.patch("/api/groups/:groupId/members/:memberId/count", authMiddleware, async 
       : Math.max(0, currentValue + Math.floor(Number(req.body?.delta)));
 
     const saved = await setMemberCycleCount(groupId, memberId, cycle.cycleKey, nextValue);
+    if (saved > currentValue) {
+      await appendCounterApplicationLogs({
+        userId: memberId,
+        group,
+        cycle,
+        fromExclusive: currentValue,
+        toInclusive: saved
+      });
+    } else if (saved < currentValue) {
+      await removeRecentCounterApplicationLogs({
+        userId: memberId,
+        groupId,
+        cycleKey: cycle.cycleKey,
+        count: currentValue - saved
+      });
+    }
 
     return res.status(200).json({
       memberId,
@@ -3106,6 +3343,22 @@ app.patch("/api/groups/:groupId/members/:memberId/count", authMiddleware, async 
   } catch (error) {
     return res.status(500).json({
       error: error instanceof Error ? error.message : "Unable to update member application count."
+    });
+  }
+});
+
+app.get("/api/applications/counter-logs", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    if (!userId) {
+      return res.status(401).json({ error: "Missing user identity." });
+    }
+
+    const logs = await listCounterApplicationLogsForUser(userId, 500);
+    return res.status(200).json({ logs });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to fetch application logs."
     });
   }
 });

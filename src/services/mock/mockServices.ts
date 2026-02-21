@@ -3,6 +3,7 @@ import type {
   ApplicationLog,
   AuthSession,
   BankAccount,
+  CounterApplicationLog,
   Group,
   GroupActivitySnapshot,
   GroupGoalStartDay,
@@ -146,6 +147,27 @@ interface BackendMemberCountUpdateResponse {
   applicationsCount: number;
 }
 
+interface BackendCounterApplicationLog {
+  id: string;
+  userId: string;
+  groupId: string;
+  groupName: string;
+  goalCycle: "daily" | "weekly" | "biweekly";
+  goalStartDay: GroupGoalStartDay;
+  applicationGoal: number;
+  stakeUsd: number;
+  cycleKey: string;
+  cycleLabel: "day" | "week" | "biweekly";
+  cycleStartsAt: string;
+  cycleEndsAt: string;
+  applicationIndex: number;
+  loggedAt: string;
+}
+
+interface BackendCounterApplicationLogsResponse {
+  logs: BackendCounterApplicationLog[];
+}
+
 class BackendUnavailableError extends Error {}
 
 const configuredStrategy = (import.meta.env.VITE_AUTH_STRATEGY as string | undefined)?.toLowerCase();
@@ -259,6 +281,25 @@ function mapBackendGroupActivity(entry: BackendGroupActivitySnapshot): GroupActi
       goal: Math.max(0, Number(member.goal ?? 0)),
       status: member.status
     }))
+  };
+}
+
+function mapBackendCounterApplicationLog(entry: BackendCounterApplicationLog): CounterApplicationLog {
+  return {
+    id: entry.id,
+    userId: entry.userId,
+    groupId: entry.groupId,
+    groupName: entry.groupName,
+    goalCycle: entry.goalCycle ?? "weekly",
+    goalStartDay: entry.goalStartDay ?? "monday",
+    applicationGoal: Math.max(0, Number(entry.applicationGoal ?? 0)),
+    stakeUsd: Math.max(0, Number(entry.stakeUsd ?? 0)),
+    cycleKey: entry.cycleKey,
+    cycleLabel: entry.cycleLabel,
+    cycleStartsAt: entry.cycleStartsAt,
+    cycleEndsAt: entry.cycleEndsAt,
+    applicationIndex: Math.max(0, Number(entry.applicationIndex ?? 0)),
+    loggedAt: entry.loggedAt
   };
 }
 
@@ -872,6 +913,75 @@ function buildLocalGroupActivity(groupId: string): GroupActivitySnapshot {
     cycle,
     members
   };
+}
+
+function appendLocalCounterApplicationLogs(input: {
+  userId: string;
+  group: MyGroupSummary;
+  cycle: GroupActivitySnapshot["cycle"];
+  fromExclusive: number;
+  toInclusive: number;
+}): void {
+  if (input.toInclusive <= input.fromExclusive) {
+    return;
+  }
+
+  const loggedAt = new Date().toISOString();
+  const entries: CounterApplicationLog[] = [];
+  for (let index = input.fromExclusive + 1; index <= input.toInclusive; index += 1) {
+    entries.push({
+      id: `counter-log-${Date.now()}-${index}-${Math.random().toString(16).slice(2, 6)}`,
+      userId: input.userId,
+      groupId: input.group.id,
+      groupName: input.group.name,
+      goalCycle: input.group.goalCycle,
+      goalStartDay: input.group.goalStartDay,
+      applicationGoal: Math.max(0, Number(input.group.applicationGoal ?? 0)),
+      stakeUsd: Math.max(0, Number(input.group.stakeUsd ?? 0)),
+      cycleKey: input.cycle.key,
+      cycleLabel: input.cycle.label,
+      cycleStartsAt: input.cycle.startsAt,
+      cycleEndsAt: input.cycle.endsAt,
+      applicationIndex: index,
+      loggedAt
+    });
+  }
+
+  updateState((current) => ({
+    ...current,
+    counterApplicationLogs: [...entries, ...current.counterApplicationLogs]
+  }));
+}
+
+function removeLocalCounterApplicationLogs(input: {
+  userId: string;
+  groupId: string;
+  cycleKey: string;
+  count: number;
+}): void {
+  const removalCount = Math.max(0, Math.floor(Number(input.count) || 0));
+  if (removalCount <= 0) {
+    return;
+  }
+
+  let remaining = removalCount;
+  updateState((current) => ({
+    ...current,
+    counterApplicationLogs: current.counterApplicationLogs.filter((entry) => {
+      if (remaining <= 0) {
+        return true;
+      }
+      if (
+        entry.userId === input.userId &&
+        entry.groupId === input.groupId &&
+        entry.cycleKey === input.cycleKey
+      ) {
+        remaining -= 1;
+        return false;
+      }
+      return true;
+    })
+  }));
 }
 
 function belongsToWeek(log: ApplicationLog, weekId: string, timezone: string): boolean {
@@ -1662,6 +1772,23 @@ const groupService: GroupService = {
       const nextValue = hasAbsolute
         ? Math.max(0, Math.floor(Number(input.applicationsCount)))
         : Math.max(0, target.applicationsCount + Math.floor(Number(input.delta)));
+
+      if (nextValue > target.applicationsCount) {
+        appendLocalCounterApplicationLogs({
+          userId: input.memberId,
+          group: activity.group,
+          cycle: activity.cycle,
+          fromExclusive: target.applicationsCount,
+          toInclusive: nextValue
+        });
+      } else if (nextValue < target.applicationsCount) {
+        removeLocalCounterApplicationLogs({
+          userId: input.memberId,
+          groupId: input.groupId,
+          cycleKey: activity.cycle.key,
+          count: target.applicationsCount - nextValue
+        });
+      }
       localManualCycleCounts.set(
         localCycleCountMapKey(input.groupId, activity.cycle.key, input.memberId),
         nextValue
@@ -1709,6 +1836,22 @@ const groupService: GroupService = {
         const nextValue = hasAbsolute
           ? Math.max(0, Math.floor(Number(input.applicationsCount)))
           : Math.max(0, target.applicationsCount + Math.floor(Number(input.delta)));
+        if (nextValue > target.applicationsCount) {
+          appendLocalCounterApplicationLogs({
+            userId: input.memberId,
+            group: activity.group,
+            cycle: activity.cycle,
+            fromExclusive: target.applicationsCount,
+            toInclusive: nextValue
+          });
+        } else if (nextValue < target.applicationsCount) {
+          removeLocalCounterApplicationLogs({
+            userId: input.memberId,
+            groupId: input.groupId,
+            cycleKey: activity.cycle.key,
+            count: target.applicationsCount - nextValue
+          });
+        }
         localManualCycleCounts.set(
           localCycleCountMapKey(input.groupId, activity.cycle.key, input.memberId),
           nextValue
@@ -1755,6 +1898,36 @@ const applicationService: ApplicationService = {
   async getCurrentWeekWindow() {
     const group = getGroup();
     return withLatency(getWeekWindow(new Date(), group.timezone));
+  },
+
+  async getCounterApplicationLogs() {
+    const user = getCurrentUserRecord();
+    if (!backendAuthEnabled()) {
+      const state = getState();
+      const logs = state.counterApplicationLogs
+        .filter((entry) => entry.userId === user.id)
+        .sort((a, b) => new Date(b.loggedAt).getTime() - new Date(a.loggedAt).getTime());
+      return withLatency(logs);
+    }
+
+    try {
+      const payload = await backendRequest<BackendCounterApplicationLogsResponse>(
+        "/api/applications/counter-logs",
+        {
+          method: "GET"
+        }
+      );
+      return withLatency(payload.logs.map((entry) => mapBackendCounterApplicationLog(entry)));
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        const state = getState();
+        const logs = state.counterApplicationLogs
+          .filter((entry) => entry.userId === user.id)
+          .sort((a, b) => new Date(b.loggedAt).getTime() - new Date(a.loggedAt).getTime());
+        return withLatency(logs);
+      }
+      throw error;
+    }
   },
 
   async getLogsForWeek(weekId) {

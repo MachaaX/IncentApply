@@ -11,26 +11,33 @@ function canUseLocalStorage(): boolean {
 }
 
 function normalizeTimezone(state: MockState): MockState {
+  const withCounterLogs: MockState = {
+    ...state,
+    counterApplicationLogs: Array.isArray(state.counterApplicationLogs)
+      ? state.counterApplicationLogs
+      : []
+  };
+
   if (
-    state.group.timezone === APP_TIME_ZONE &&
-    state.group.weekConfig.timezone === APP_TIME_ZONE &&
-    state.platformConfig.timezoneDefault === APP_TIME_ZONE
+    withCounterLogs.group.timezone === APP_TIME_ZONE &&
+    withCounterLogs.group.weekConfig.timezone === APP_TIME_ZONE &&
+    withCounterLogs.platformConfig.timezoneDefault === APP_TIME_ZONE
   ) {
-    return state;
+    return withCounterLogs;
   }
 
   return {
-    ...state,
+    ...withCounterLogs,
     group: {
-      ...state.group,
+      ...withCounterLogs.group,
       timezone: APP_TIME_ZONE,
       weekConfig: {
-        ...state.group.weekConfig,
+        ...withCounterLogs.group.weekConfig,
         timezone: APP_TIME_ZONE
       }
     },
     platformConfig: {
-      ...state.platformConfig,
+      ...withCounterLogs.platformConfig,
       timezoneDefault: APP_TIME_ZONE
     }
   };

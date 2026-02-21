@@ -345,6 +345,7 @@ export function createSeedState(): MockState {
     wallets,
     gmailSyncStates: createGmailStates(),
     applicationLogs,
+    counterApplicationLogs: [],
     settlementCycles: [cycle],
     settlementResults: history,
     activities: createActivity(now),
