@@ -12,7 +12,7 @@ const routeTitle: Record<string, string> = {
   "/settlements": "Settlements"
 };
 
-const mockNotifications = [
+const initialNotifications = [
   { id: "notif-1", message: "Welcome to IncentApply - 02/26" },
   { id: "notif-2", message: "You are behind the goal this week" },
   { id: "notif-3", message: "You have a group invite in My Groups" }
@@ -32,6 +32,7 @@ export function TopNav() {
   const myGroupsQuery = useMyGroupsList();
   const pendingInvitesQuery = usePendingInvites();
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState(initialNotifications);
   const [groupMenuOpen, setGroupMenuOpen] = useState(false);
   const groupMenuRef = useRef<HTMLDivElement | null>(null);
   const isMyGroupsRoute = location.pathname.startsWith("/my-groups");
@@ -66,6 +67,9 @@ export function TopNav() {
   const startFreshCreateGroup = () => {
     window.dispatchEvent(new Event("incentapply:create-group-fresh-start"));
     navigate("/my-groups/create");
+  };
+  const dismissNotification = (notificationId: string) => {
+    setNotifications((items) => items.filter((item) => item.id !== notificationId));
   };
 
   useEffect(() => {
@@ -209,7 +213,7 @@ export function TopNav() {
             aria-expanded={notificationsOpen}
           >
             <span className="material-icons text-[26px]">notifications</span>
-            {mockNotifications.length ? (
+            {notifications.length ? (
               <span className="absolute right-0 top-0 h-2.5 w-2.5 rounded-full bg-secondary-gold" />
             ) : null}
           </button>
@@ -252,13 +256,30 @@ export function TopNav() {
                 <span className="material-icons text-base">close</span>
               </button>
             </div>
-            <ul className="space-y-2">
-              {mockNotifications.map((item) => (
-                <li key={item.id} className="rounded-lg border border-primary/10 bg-background-dark px-3 py-2">
-                  <p className="text-sm text-slate-100">{item.message}</p>
-                </li>
-              ))}
-            </ul>
+            {notifications.length ? (
+              <ul className="space-y-2">
+                {notifications.map((item) => (
+                  <li
+                    key={item.id}
+                    className="flex items-start justify-between gap-2 rounded-lg border border-primary/10 bg-background-dark px-3 py-2"
+                  >
+                    <p className="text-sm text-slate-100">{item.message}</p>
+                    <button
+                      type="button"
+                      onClick={() => dismissNotification(item.id)}
+                      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-primary/20 text-slate-300 transition-colors hover:text-white"
+                      aria-label={`Dismiss notification: ${item.message}`}
+                    >
+                      <span className="material-icons text-base">close</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="rounded-lg border border-primary/10 bg-background-dark px-3 py-3 text-sm text-slate-400">
+                No notifications.
+              </p>
+            )}
           </aside>
         </>
       ) : null}
