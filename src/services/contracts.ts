@@ -14,6 +14,7 @@ import type {
   MemberProgress,
   PlatformConfig,
   SettlementCycle,
+  SettlementLog,
   SettlementResult,
   User,
   Wallet,
@@ -76,6 +77,7 @@ export interface GroupService {
   joinWithInviteCode(inviteCode: string): Promise<MyGroupSummary>;
   regenerateInviteCode(groupId: string): Promise<MyGroupSummary>;
   deleteGroup(groupId: string): Promise<void>;
+  leaveGroup(groupId: string): Promise<void>;
   updateMemberApplicationCount(input: {
     groupId: string;
     memberId: string;
@@ -116,6 +118,7 @@ export interface WalletService {
 }
 
 export interface SettlementService {
+  getLogs(): Promise<SettlementLog[]>;
   getCurrentCycle(): Promise<SettlementCycle>;
   getHistory(): Promise<SettlementResult[]>;
   simulateSettlementNow(): Promise<SettlementResult>;

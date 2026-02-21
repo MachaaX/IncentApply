@@ -11,6 +11,7 @@ import type {
   PendingGroupInvite,
   LeaderboardEntry,
   MemberProgress,
+  SettlementLog,
   SettlementCycle,
   SettlementResult,
   User,
@@ -122,6 +123,10 @@ interface BackendDeleteGroupResponse {
   ok: boolean;
 }
 
+interface BackendLeaveGroupResponse {
+  ok: boolean;
+}
+
 interface BackendUserExistsResponse {
   exists: boolean;
 }
@@ -171,6 +176,42 @@ interface BackendCounterApplicationLog {
 
 interface BackendCounterApplicationLogsResponse {
   logs: BackendCounterApplicationLog[];
+}
+
+interface BackendSettlementParticipantSnapshot {
+  userId: string;
+  name: string;
+  email: string;
+  applicationsCount: number;
+  metGoal: boolean;
+  amountWonCents: number;
+}
+
+interface BackendSettlementLog {
+  id: string;
+  userId: string;
+  groupId: string;
+  groupName: string;
+  goalCycle: "daily" | "weekly" | "biweekly";
+  goalStartDay: GroupGoalStartDay;
+  applicationGoal: number;
+  stakeUsd: number;
+  cycleKey: string;
+  cycleLabel: "day" | "week" | "biweekly";
+  cycleStartsAt: string;
+  cycleEndsAt: string;
+  settledAt: string;
+  participantCount: number;
+  qualifiedParticipantCount: number;
+  potValueCents: number;
+  amountWonCents: number;
+  applicationsCount: number;
+  metGoal: boolean;
+  participants: BackendSettlementParticipantSnapshot[];
+}
+
+interface BackendSettlementLogsResponse {
+  logs: BackendSettlementLog[];
 }
 
 class BackendUnavailableError extends Error {}
@@ -341,6 +382,41 @@ function mapBackendCounterApplicationLog(entry: BackendCounterApplicationLog): C
     applicationIndex: Math.max(0, Number(entry.applicationIndex ?? 0)),
     loggedAt: entry.loggedAt
   });
+}
+
+function mapBackendSettlementLog(entry: BackendSettlementLog): SettlementLog {
+  return {
+    id: entry.id,
+    userId: entry.userId,
+    groupId: entry.groupId,
+    groupName: entry.groupName,
+    goalCycle: entry.goalCycle ?? "weekly",
+    goalStartDay: entry.goalStartDay ?? "monday",
+    applicationGoal: Math.max(0, Number(entry.applicationGoal ?? 0)),
+    stakeUsd: Math.max(0, Number(entry.stakeUsd ?? 0)),
+    cycleKey: entry.cycleKey,
+    cycleLabel:
+      entry.cycleLabel === "day" || entry.cycleLabel === "biweekly" ? entry.cycleLabel : "week",
+    cycleStartsAt: entry.cycleStartsAt,
+    cycleEndsAt: entry.cycleEndsAt,
+    settledAt: entry.settledAt,
+    participantCount: Math.max(0, Number(entry.participantCount ?? 0)),
+    qualifiedParticipantCount: Math.max(0, Number(entry.qualifiedParticipantCount ?? 0)),
+    potValueCents: Math.max(0, Number(entry.potValueCents ?? 0)),
+    amountWonCents: Math.max(0, Number(entry.amountWonCents ?? 0)),
+    applicationsCount: Math.max(0, Number(entry.applicationsCount ?? 0)),
+    metGoal: Boolean(entry.metGoal),
+    participants: Array.isArray(entry.participants)
+      ? entry.participants.map((participant) => ({
+          userId: String(participant.userId ?? ""),
+          name: String(participant.name ?? ""),
+          email: String(participant.email ?? ""),
+          applicationsCount: Math.max(0, Number(participant.applicationsCount ?? 0)),
+          metGoal: Boolean(participant.metGoal),
+          amountWonCents: Math.max(0, Number(participant.amountWonCents ?? 0))
+        }))
+      : []
+  };
 }
 
 function getLocalCycleWindow(input: {
@@ -906,6 +982,13 @@ function getGroup(): Group {
 }
 
 function localGroupToSummary(group: Group): MyGroupSummary {
+  const state = getState();
+  const currentUserId = state.session?.userId;
+  const currentUser = state.users.find((entry) => entry.id === currentUserId);
+  const myRole: "admin" | "member" =
+    currentUserId && (currentUserId === group.ownerUserId || currentUser?.role === "owner" || currentUser?.role === "admin")
+      ? "admin"
+      : "member";
   const owner = getState().users.find((entry) => entry.id === group.ownerUserId);
   const ownerName = owner ? `${owner.firstName} ${owner.lastName}`.trim() : "Group Owner";
 
@@ -916,7 +999,7 @@ function localGroupToSummary(group: Group): MyGroupSummary {
     stakeUsd: (group.rules.baseStakeCents + group.rules.goalLockedStakeCents) / 100,
     goalCycle: "weekly",
     goalStartDay: group.weekConfig.weekStartsOn,
-    myRole: "admin",
+    myRole,
     weeklyGoal: group.weeklyGoal,
     weeklyStakeUsd: (group.rules.baseStakeCents + group.rules.goalLockedStakeCents) / 100,
     ownerUserId: group.ownerUserId,
@@ -929,8 +1012,24 @@ function localGroupToSummary(group: Group): MyGroupSummary {
   return withLocalGroupOverrides(baseSummary);
 }
 
+function localMyGroupsForCurrentUser(): MyGroupSummary[] {
+  const state = getState();
+  const sessionUserId = state.session?.userId;
+  if (!sessionUserId) {
+    return [];
+  }
+  if (!state.group.memberIds.includes(sessionUserId)) {
+    return [];
+  }
+  return [localGroupToSummary(state.group)];
+}
+
 function buildLocalGroupActivity(groupId: string): GroupActivitySnapshot {
   const state = getState();
+  const sessionUserId = state.session?.userId;
+  if (!sessionUserId || !state.group.memberIds.includes(sessionUserId)) {
+    throw new Error("Group not found.");
+  }
   const summary = localGroupToSummary(state.group);
   if (summary.id !== groupId) {
     throw new Error("Group not found.");
@@ -1070,6 +1169,27 @@ function computeProgress(weekId: string): MemberProgress[] {
 
 function isAdminOrOwner(user: User): boolean {
   return user.role === "owner" || user.role === "admin";
+}
+
+function localLeaveGroup(groupId: string): void {
+  const user = getCurrentUserRecord();
+  updateState((current) => {
+    if (current.group.id !== groupId || !current.group.memberIds.includes(user.id)) {
+      throw new Error("Group not found.");
+    }
+
+    if (user.id === current.group.ownerUserId || isAdminOrOwner(user)) {
+      throw new Error("Admins cannot leave a group. Delete the group instead.");
+    }
+
+    return {
+      ...current,
+      group: {
+        ...current.group,
+        memberIds: current.group.memberIds.filter((memberId) => memberId !== user.id)
+      }
+    };
+  });
 }
 
 function buildLeaderboard(weekId: string): LeaderboardEntry[] {
@@ -1414,7 +1534,7 @@ const groupService: GroupService = {
 
   async getMyGroups() {
     if (!backendAuthEnabled()) {
-      return withLatency([localGroupToSummary(getGroup())]);
+      return withLatency(localMyGroupsForCurrentUser());
     }
 
     try {
@@ -1427,7 +1547,7 @@ const groupService: GroupService = {
         return withLatency([]);
       }
       if (shouldFallbackToMock(error)) {
-        return withLatency([localGroupToSummary(getGroup())]);
+        return withLatency(localMyGroupsForCurrentUser());
       }
       throw error;
     }
@@ -1435,7 +1555,7 @@ const groupService: GroupService = {
 
   async getGroupById(groupId) {
     if (!backendAuthEnabled()) {
-      const groups = [localGroupToSummary(getGroup())];
+      const groups = localMyGroupsForCurrentUser();
       const found = groups.find((group) => group.id === groupId) ?? groups[0];
       return withLatency(throwIfMissing(found, "Group not found."));
     }
@@ -1447,7 +1567,7 @@ const groupService: GroupService = {
       return withLatency(mapBackendGroupSummary(payload.group));
     } catch (error) {
       if (shouldFallbackToMock(error)) {
-        const groups = [localGroupToSummary(getGroup())];
+        const groups = localMyGroupsForCurrentUser();
         const found = groups.find((group) => group.id === groupId) ?? groups[0];
         return withLatency(throwIfMissing(found, "Group not found."));
       }
@@ -1677,6 +1797,26 @@ const groupService: GroupService = {
       return withLatency(undefined);
     } catch (error) {
       if (shouldFallbackToMock(error)) {
+        return withLatency(undefined);
+      }
+      throw error;
+    }
+  },
+
+  async leaveGroup(groupId) {
+    if (!backendAuthEnabled()) {
+      localLeaveGroup(groupId);
+      return withLatency(undefined);
+    }
+
+    try {
+      await backendRequest<BackendLeaveGroupResponse>(`/api/groups/${groupId}/leave`, {
+        method: "POST"
+      });
+      return withLatency(undefined);
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        localLeaveGroup(groupId);
         return withLatency(undefined);
       }
       throw error;
@@ -2278,7 +2418,79 @@ const walletService: WalletService = {
   }
 };
 
+function buildLocalSettlementLogsForUser(userId: string): SettlementLog[] {
+  const state = getState();
+  const summary = localGroupToSummary(state.group);
+  const cycleLabel = summary.goalCycle === "daily" ? "day" : summary.goalCycle === "biweekly" ? "biweekly" : "week";
+  const usersById = new Map(state.users.map((entry) => [entry.id, entry]));
+
+  return [...state.settlementResults]
+    .sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime())
+    .filter((result) => result.totalMembers > 1)
+    .map((result) => {
+      const cycle = state.settlementCycles.find((entry) => entry.weekId === result.weekId);
+      const participants = result.breakdowns.map((breakdown) => {
+        const profile = usersById.get(breakdown.userId);
+        const displayName = profile
+          ? `${profile.firstName} ${profile.lastName}`.trim() || profile.email
+          : breakdown.userId;
+        const email = profile?.email ?? "";
+        return {
+          userId: breakdown.userId,
+          name: displayName,
+          email,
+          applicationsCount: Math.max(0, Number(breakdown.applicationsSent ?? 0)),
+          metGoal: Boolean(breakdown.metGoal),
+          amountWonCents: Math.max(0, Number(breakdown.penaltyShareCents ?? 0))
+        };
+      });
+
+      const current = result.breakdowns.find((entry) => entry.userId === userId);
+      return {
+        id: `${result.cycleId}:${userId}`,
+        userId,
+        groupId: result.groupId,
+        groupName: summary.name,
+        goalCycle: summary.goalCycle,
+        goalStartDay: summary.goalStartDay,
+        applicationGoal: summary.applicationGoal,
+        stakeUsd: summary.stakeUsd,
+        cycleKey: result.weekId,
+        cycleLabel,
+        cycleStartsAt: cycle?.startsAt ?? result.completedAt,
+        cycleEndsAt: cycle?.endsAt ?? result.completedAt,
+        settledAt: result.completedAt,
+        participantCount: result.totalMembers,
+        qualifiedParticipantCount: result.breakdowns.filter((entry) => entry.metGoal).length,
+        potValueCents: Math.max(0, Math.round(summary.stakeUsd * result.totalMembers * 100)),
+        amountWonCents: Math.max(0, Number(current?.penaltyShareCents ?? 0)),
+        applicationsCount: Math.max(0, Number(current?.applicationsSent ?? 0)),
+        metGoal: Boolean(current?.metGoal),
+        participants
+      };
+    });
+}
+
 const settlementService: SettlementService = {
+  async getLogs() {
+    const user = getCurrentUserRecord();
+    if (!backendAuthEnabled()) {
+      return withLatency(buildLocalSettlementLogsForUser(user.id));
+    }
+
+    try {
+      const payload = await backendRequest<BackendSettlementLogsResponse>("/api/settlements/logs", {
+        method: "GET"
+      });
+      return withLatency(payload.logs.map((entry) => mapBackendSettlementLog(entry)));
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        return withLatency(buildLocalSettlementLogsForUser(user.id));
+      }
+      throw error;
+    }
+  },
+
   async getCurrentCycle() {
     const state = getState();
     const window = getWeekWindow(new Date(), state.group.timezone);

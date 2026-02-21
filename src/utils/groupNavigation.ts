@@ -19,3 +19,11 @@ export function setLastOpenedGroupId(groupId: string): void {
 
   window.localStorage.setItem(LAST_OPENED_GROUP_STORAGE_KEY, groupId);
 }
+
+export function clearLastOpenedGroupId(): void {
+  if (!canUseStorage()) {
+    return;
+  }
+
+  window.localStorage.removeItem(LAST_OPENED_GROUP_STORAGE_KEY);
+}

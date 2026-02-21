@@ -119,6 +119,15 @@ export function useWallet() {
   });
 }
 
+export function useSettlementLogs() {
+  const { settlementService } = useServices();
+  return useQuery({
+    queryKey: ["settlement-logs"],
+    queryFn: () => settlementService.getLogs(),
+    refetchInterval: 5000
+  });
+}
+
 export function useCurrentCycle() {
   const { settlementService } = useServices();
   return useQuery({
@@ -299,6 +308,20 @@ export function useDeleteGroup() {
   });
 }
 
+export function useLeaveGroup() {
+  const { groupService } = useServices();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (groupId: string) => groupService.leaveGroup(groupId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["my-groups-list"] });
+      void queryClient.invalidateQueries({ queryKey: ["pending-invites"] });
+      void queryClient.invalidateQueries({ queryKey: ["group"] });
+      void queryClient.invalidateQueries({ queryKey: ["members"] });
+    }
+  });
+}
+
 export function useUpdateMemberApplicationCount() {
   const { groupService } = useServices();
   const queryClient = useQueryClient();
@@ -381,6 +404,7 @@ export function useSimulateSettlement() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["wallet"] });
       void queryClient.invalidateQueries({ queryKey: ["settlement-history"] });
+      void queryClient.invalidateQueries({ queryKey: ["settlement-logs"] });
       void queryClient.invalidateQueries({ queryKey: ["settlement-cycle"] });
       void queryClient.invalidateQueries({ queryKey: ["leaderboard"] });
       void queryClient.invalidateQueries({ queryKey: ["member-progress"] });

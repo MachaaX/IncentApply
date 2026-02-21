@@ -177,6 +177,38 @@ export interface CounterApplicationLog {
   loggedAt: string;
 }
 
+export interface SettlementParticipantSnapshot {
+  userId: string;
+  name: string;
+  email: string;
+  applicationsCount: number;
+  metGoal: boolean;
+  amountWonCents: number;
+}
+
+export interface SettlementLog {
+  id: string;
+  userId: string;
+  groupId: string;
+  groupName: string;
+  goalCycle: GroupGoalCycle;
+  goalStartDay: GroupGoalStartDay;
+  applicationGoal: number;
+  stakeUsd: number;
+  cycleKey: string;
+  cycleLabel: "day" | "week" | "biweekly";
+  cycleStartsAt: string;
+  cycleEndsAt: string;
+  settledAt: string;
+  participantCount: number;
+  qualifiedParticipantCount: number;
+  potValueCents: number;
+  amountWonCents: number;
+  applicationsCount: number;
+  metGoal: boolean;
+  participants: SettlementParticipantSnapshot[];
+}
+
 export interface GmailSyncState {
   userId: string;
   connected: boolean;

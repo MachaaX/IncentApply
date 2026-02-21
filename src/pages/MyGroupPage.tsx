@@ -3,7 +3,9 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   useDeleteGroup,
   useGroupActivity,
+  useLeaveGroup,
   useMyGroupSummary,
+  useMyGroupsList,
   useRegenerateGroupInviteCode,
   useUpdateGroupSettings,
   useUpdateMemberApplicationCount
@@ -11,6 +13,7 @@ import {
 import type { GroupActivityMember, GroupGoalCycle, GroupGoalStartDay } from "../domain/types";
 import { centsToUsd, dateTimeWithYearLabel } from "../utils/format";
 import { useAuth } from "../app/AuthContext";
+import { clearLastOpenedGroupId, setLastOpenedGroupId } from "../utils/groupNavigation";
 
 function initials(name: string): string {
   const parts = name
@@ -137,9 +140,11 @@ export function MyGroupPage() {
   const { groupId } = useParams<{ groupId: string }>();
   const groupSummaryQuery = useMyGroupSummary(groupId);
   const groupActivityQuery = useGroupActivity(groupId);
+  const myGroupsListQuery = useMyGroupsList();
   const updateGroupSettings = useUpdateGroupSettings();
   const regenerateInviteCode = useRegenerateGroupInviteCode();
   const deleteGroup = useDeleteGroup();
+  const leaveGroup = useLeaveGroup();
   const updateMemberApplicationCount = useUpdateMemberApplicationCount();
 
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -150,6 +155,7 @@ export function MyGroupPage() {
   const [settingsStatus, setSettingsStatus] = useState<string | null>(null);
   const [settingsStatusTone, setSettingsStatusTone] = useState<"success" | "warning">("success");
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmLeave, setConfirmLeave] = useState(false);
   const [counterStatus, setCounterStatus] = useState<string | null>(null);
   const [counterStatusTone, setCounterStatusTone] = useState<"success" | "warning">("success");
   const [localCounterCount, setLocalCounterCount] = useState<number | null>(null);
@@ -172,6 +178,10 @@ export function MyGroupPage() {
     }
     setConfirmDelete(false);
   }, [settingsOpen]);
+
+  useEffect(() => {
+    setConfirmLeave(false);
+  }, [groupId]);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => setNowMs(Date.now()), 1000);
@@ -320,10 +330,47 @@ export function MyGroupPage() {
     setSettingsStatus(null);
     try {
       await deleteGroup.mutateAsync(groupId);
-      navigate("/my-groups", { replace: true });
+      await navigateAfterGroupRemoved(groupId);
     } catch (reason) {
       setSettingsStatusTone("warning");
       setSettingsStatus(reason instanceof Error ? reason.message : "Unable to delete group.");
+    }
+  };
+
+  const navigateAfterGroupRemoved = async (removedGroupId: string) => {
+    const refreshed = await myGroupsListQuery.refetch();
+    const nextGroups = (refreshed.data ?? []).filter((entry) => entry.id !== removedGroupId);
+
+    if (nextGroups.length > 0) {
+      const nextGroupId = nextGroups[0].id;
+      setLastOpenedGroupId(nextGroupId);
+      navigate(`/my-groups/${nextGroupId}`, { replace: true });
+      return;
+    }
+
+    clearLastOpenedGroupId();
+    navigate("/my-groups", { replace: true });
+  };
+
+  const handleLeaveGroup = async () => {
+    if (!groupId || isAdmin) {
+      return;
+    }
+
+    if (!confirmLeave) {
+      setConfirmLeave(true);
+      setSettingsStatusTone("warning");
+      setSettingsStatus("Click Leave Group again to confirm you want to leave.");
+      return;
+    }
+
+    setSettingsStatus(null);
+    try {
+      await leaveGroup.mutateAsync(groupId);
+      await navigateAfterGroupRemoved(groupId);
+    } catch (reason) {
+      setSettingsStatusTone("warning");
+      setSettingsStatus(reason instanceof Error ? reason.message : "Unable to leave group.");
     }
   };
 
@@ -381,8 +428,23 @@ export function MyGroupPage() {
               <span className="material-icons text-base">tune</span>
               Group Settings
             </button>
-          ) : null}
+          ) : (
+            <button
+              type="button"
+              onClick={() => void handleLeaveGroup()}
+              disabled={leaveGroup.isPending}
+              className="inline-flex items-center gap-1.5 self-start rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm font-bold text-red-300 transition-colors hover:bg-red-500/20 disabled:opacity-70"
+            >
+              <span className="material-icons text-base">logout</span>
+              {leaveGroup.isPending ? "Leaving..." : confirmLeave ? "Confirm Leave Group" : "Leave Group"}
+            </button>
+          )}
         </div>
+        {!isAdmin && settingsStatus ? (
+          <p className={`mt-3 text-sm ${settingsStatusTone === "warning" ? "text-secondary-gold" : "text-[#92c9b7]"}`}>
+            {settingsStatus}
+          </p>
+        ) : null}
 
         {isAdmin && settingsOpen ? (
           <div className="mt-4 space-y-4 rounded-xl border border-primary/20 bg-background-dark/40 p-4">

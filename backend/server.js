@@ -530,6 +530,35 @@ async function initDb() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS member_settlement_logs (
+        id VARCHAR(191) PRIMARY KEY,
+        user_id VARCHAR(191) NOT NULL,
+        group_id_snapshot VARCHAR(191) NOT NULL,
+        group_name_snapshot VARCHAR(${GROUP_NAME_MAX_LENGTH}) NOT NULL,
+        goal_cycle_snapshot VARCHAR(16) NOT NULL,
+        goal_start_day_snapshot VARCHAR(16) NOT NULL,
+        application_goal_snapshot INT NOT NULL,
+        stake_usd_snapshot INT NOT NULL,
+        cycle_key_snapshot VARCHAR(64) NOT NULL,
+        cycle_label_snapshot VARCHAR(16) NOT NULL,
+        cycle_starts_at TIMESTAMP NOT NULL,
+        cycle_ends_at TIMESTAMP NOT NULL,
+        settled_at TIMESTAMP NOT NULL,
+        participant_count INT NOT NULL,
+        qualified_participant_count INT NOT NULL,
+        pot_value_cents_snapshot INT NOT NULL,
+        amount_won_cents INT NOT NULL,
+        applications_count_snapshot INT NOT NULL,
+        met_goal_snapshot BOOLEAN NOT NULL,
+        participants_snapshot_json LONGTEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY member_settlement_logs_user_group_cycle_uidx (user_id, group_id_snapshot, cycle_key_snapshot),
+        KEY member_settlement_logs_user_settled_idx (user_id, settled_at),
+        KEY member_settlement_logs_group_cycle_idx (group_id_snapshot, cycle_key_snapshot)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
     const goalCycleColumn = await pool.query(`
       SELECT COUNT(*) AS count
       FROM information_schema.columns
@@ -694,6 +723,32 @@ async function initDb() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS member_settlement_logs (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      group_id_snapshot TEXT NOT NULL,
+      group_name_snapshot TEXT NOT NULL,
+      goal_cycle_snapshot TEXT NOT NULL,
+      goal_start_day_snapshot TEXT NOT NULL,
+      application_goal_snapshot INT NOT NULL,
+      stake_usd_snapshot INT NOT NULL,
+      cycle_key_snapshot TEXT NOT NULL,
+      cycle_label_snapshot TEXT NOT NULL,
+      cycle_starts_at TIMESTAMPTZ NOT NULL,
+      cycle_ends_at TIMESTAMPTZ NOT NULL,
+      settled_at TIMESTAMPTZ NOT NULL,
+      participant_count INT NOT NULL,
+      qualified_participant_count INT NOT NULL,
+      pot_value_cents_snapshot INT NOT NULL,
+      amount_won_cents INT NOT NULL,
+      applications_count_snapshot INT NOT NULL,
+      met_goal_snapshot BOOLEAN NOT NULL,
+      participants_snapshot_json TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS group_members_user_idx
     ON group_members(user_id);
   `);
@@ -706,6 +761,21 @@ async function initDb() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS member_counter_application_logs_user_logged_idx
     ON member_counter_application_logs(user_id, logged_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS member_settlement_logs_user_group_cycle_uidx
+    ON member_settlement_logs(user_id, group_id_snapshot, cycle_key_snapshot);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS member_settlement_logs_user_settled_idx
+    ON member_settlement_logs(user_id, settled_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS member_settlement_logs_group_cycle_idx
+    ON member_settlement_logs(group_id_snapshot, cycle_key_snapshot);
   `);
 
   if (memberCycleCountsStoreMode === "database") {
@@ -1118,6 +1188,75 @@ function toCounterApplicationLog(row) {
     applicationIndex: Math.max(0, Number(row.application_index ?? 0)),
     loggedAt: asIsoTimestamp(row.logged_at)
   };
+}
+
+function parseSettlementParticipantsSnapshot(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.map((entry) => ({
+      userId: String(entry?.userId ?? ""),
+      name: String(entry?.name ?? ""),
+      email: String(entry?.email ?? ""),
+      applicationsCount: Math.max(0, Number(entry?.applicationsCount ?? 0)),
+      metGoal: Boolean(entry?.metGoal),
+      amountWonCents: Math.max(0, Number(entry?.amountWonCents ?? 0))
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function toSettlementLog(row) {
+  const goalCycle = normalizeGoalCycle(row.goal_cycle_snapshot);
+  const goalStartDay = normalizeGoalStartDay(row.goal_start_day_snapshot);
+  const cycleLabel =
+    row.cycle_label_snapshot === "day" || row.cycle_label_snapshot === "biweekly"
+      ? row.cycle_label_snapshot
+      : "week";
+
+  return {
+    id: String(row.id ?? ""),
+    userId: String(row.user_id ?? ""),
+    groupId: String(row.group_id_snapshot ?? ""),
+    groupName: String(row.group_name_snapshot ?? ""),
+    goalCycle,
+    goalStartDay,
+    applicationGoal: Math.max(0, Number(row.application_goal_snapshot ?? 0)),
+    stakeUsd: Math.max(0, Number(row.stake_usd_snapshot ?? 0)),
+    cycleKey: String(row.cycle_key_snapshot ?? ""),
+    cycleLabel,
+    cycleStartsAt: asIsoTimestamp(row.cycle_starts_at),
+    cycleEndsAt: asIsoTimestamp(row.cycle_ends_at),
+    settledAt: asIsoTimestamp(row.settled_at),
+    participantCount: Math.max(0, Number(row.participant_count ?? 0)),
+    qualifiedParticipantCount: Math.max(0, Number(row.qualified_participant_count ?? 0)),
+    potValueCents: Math.max(0, Number(row.pot_value_cents_snapshot ?? 0)),
+    amountWonCents: Math.max(0, Number(row.amount_won_cents ?? 0)),
+    applicationsCount: Math.max(0, Number(row.applications_count_snapshot ?? 0)),
+    metGoal: Boolean(row.met_goal_snapshot),
+    participants: parseSettlementParticipantsSnapshot(row.participants_snapshot_json)
+  };
+}
+
+function settlementHasMultipleUniqueParticipants(log) {
+  if (Array.isArray(log.participants) && log.participants.length > 0) {
+    const uniqueIds = new Set(
+      log.participants
+        .map((participant) => String(participant?.userId ?? "").trim())
+        .filter((userId) => userId.length > 0)
+    );
+    return uniqueIds.size > 1;
+  }
+
+  return Math.max(0, Number(log.participantCount ?? 0)) > 1;
 }
 
 function normalizeInviteEmails(value, currentUserEmail) {
@@ -1618,6 +1757,366 @@ async function removeRecentCounterApplicationLogs({
   }
 
   return ids.length;
+}
+
+function listVolatileCycleKeysForGroup(groupId) {
+  const keys = new Set();
+  const prefix = `${groupId}:`;
+
+  for (const key of volatileMemberCycleCounts.keys()) {
+    if (!key.startsWith(prefix)) {
+      continue;
+    }
+    const remainder = key.slice(prefix.length);
+    const separatorIndex = remainder.indexOf(":");
+    if (separatorIndex <= 0) {
+      continue;
+    }
+    const cycleKey = remainder.slice(0, separatorIndex).trim();
+    if (cycleKey) {
+      keys.add(cycleKey);
+    }
+  }
+
+  return [...keys];
+}
+
+async function listCycleKeysForGroup(groupId) {
+  if (memberCycleCountsStoreMode !== "database") {
+    return listVolatileCycleKeysForGroup(groupId);
+  }
+
+  try {
+    const result = await pool.query(
+      `
+        SELECT DISTINCT cycle_key
+        FROM group_member_cycle_counts
+        WHERE group_id = $1
+      `,
+      [groupId]
+    );
+
+    return result.rows
+      .map((row) => String(row.cycle_key ?? "").trim())
+      .filter((cycleKey) => cycleKey.length > 0);
+  } catch (error) {
+    disablePersistentMemberCycleCounts(error);
+    return listVolatileCycleKeysForGroup(groupId);
+  }
+}
+
+function cycleWindowFromCycleKey(cycleKey) {
+  const match = /^(daily|weekly|biweekly)-(\d{4})-(\d{2})-(\d{2})$/.exec(
+    String(cycleKey ?? "").trim()
+  );
+  if (!match) {
+    return null;
+  }
+
+  const goalCycle = match[1];
+  const year = Number(match[2]);
+  const month = Number(match[3]);
+  const day = Number(match[4]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return null;
+  }
+
+  const startsAtLocal = new Date(Date.UTC(year, month - 1, day));
+  const durationDays = goalCycle === "daily" ? 1 : goalCycle === "biweekly" ? 14 : 7;
+  const endsAtLocal = addUtcCalendarDays(startsAtLocal, durationDays);
+  const startsAt = zonedLocalToUtc(
+    startsAtLocal.getUTCFullYear(),
+    startsAtLocal.getUTCMonth() + 1,
+    startsAtLocal.getUTCDate(),
+    0,
+    0,
+    0,
+    APP_TIME_ZONE
+  );
+  const endsAt = zonedLocalToUtc(
+    endsAtLocal.getUTCFullYear(),
+    endsAtLocal.getUTCMonth() + 1,
+    endsAtLocal.getUTCDate(),
+    0,
+    0,
+    0,
+    APP_TIME_ZONE
+  );
+
+  return {
+    goalCycle,
+    label: cycleLabelForGoalCycle(goalCycle),
+    startsAt,
+    endsAt,
+    cycleKey: `${goalCycle}-${match[2]}-${match[3]}-${match[4]}`
+  };
+}
+
+function settlementTimestampForCycleEnd(cycleEndsAt) {
+  const cycleEndCalendar = toUtcCalendarDate(cycleEndsAt, APP_TIME_ZONE);
+  return zonedLocalToUtc(
+    cycleEndCalendar.getUTCFullYear(),
+    cycleEndCalendar.getUTCMonth() + 1,
+    cycleEndCalendar.getUTCDate(),
+    12,
+    0,
+    0,
+    APP_TIME_ZONE
+  );
+}
+
+function memberDisplayName(row) {
+  const firstName = String(row.first_name ?? "").trim();
+  const lastName = String(row.last_name ?? "").trim();
+  return [firstName, lastName].filter(Boolean).join(" ").trim() || String(row.email ?? "Member");
+}
+
+function isDuplicateInsertError(error) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("duplicate") ||
+    message.includes("already exists") ||
+    message.includes("unique constraint")
+  );
+}
+
+async function hasSettlementLogsForGroupCycle(groupId, cycleKey) {
+  const result = await pool.query(
+    `
+      SELECT 1
+      FROM member_settlement_logs
+      WHERE group_id_snapshot = $1
+        AND cycle_key_snapshot = $2
+      LIMIT 1
+    `,
+    [groupId, cycleKey]
+  );
+  return result.rows.length > 0;
+}
+
+function buildPayoutMap(participants, stakeCents) {
+  const eligible = participants.filter((participant) => participant.metGoal);
+  const payoutTargets = eligible.length ? eligible : participants;
+  const totalPotCents = Math.max(0, participants.length * stakeCents);
+  const sortedTargets = [...payoutTargets].sort((left, right) =>
+    left.userId.localeCompare(right.userId)
+  );
+
+  const payoutMap = new Map();
+  if (!sortedTargets.length || totalPotCents <= 0) {
+    return {
+      payoutMap,
+      qualifiedCount: eligible.length,
+      totalPotCents
+    };
+  }
+
+  const baseShare = Math.floor(totalPotCents / sortedTargets.length);
+  let remainder = totalPotCents % sortedTargets.length;
+  for (const target of sortedTargets) {
+    const payout = baseShare + (remainder > 0 ? 1 : 0);
+    if (remainder > 0) {
+      remainder -= 1;
+    }
+    payoutMap.set(target.userId, payout);
+  }
+
+  return {
+    payoutMap,
+    qualifiedCount: eligible.length,
+    totalPotCents
+  };
+}
+
+async function appendSettlementLogsForGroupCycle(group, cycleWindow) {
+  const existing = await hasSettlementLogsForGroupCycle(group.id, cycleWindow.cycleKey);
+  if (existing) {
+    return 0;
+  }
+
+  const settledAt = settlementTimestampForCycleEnd(cycleWindow.endsAt);
+  if (Date.now() < settledAt.getTime()) {
+    return 0;
+  }
+
+  const members = await getGroupMembersWithProfiles(group.id);
+  if (members.length <= 1) {
+    return 0;
+  }
+
+  const goalCycle = normalizeGoalCycle(group.goal_cycle);
+  const goalStartDay = normalizeGoalStartDay(group.goal_start_day);
+  const applicationGoal = Math.max(0, Number(group.weekly_goal ?? 0));
+  const stakeUsd = Math.max(0, Number(group.weekly_stake_usd ?? 0));
+  const stakeCents = Math.max(0, Math.round(stakeUsd * 100));
+  const countsByUserId = await getCycleCountsForGroup(group.id, cycleWindow.cycleKey);
+
+  const participantSnapshots = members.map((member) => {
+    const applicationsCount = countsByUserId.get(String(member.user_id)) ?? 0;
+    const metGoal = applicationGoal <= 0 ? true : applicationsCount >= applicationGoal;
+
+    return {
+      userId: String(member.user_id),
+      name: memberDisplayName(member),
+      email: String(member.email ?? ""),
+      applicationsCount: Math.max(0, Number(applicationsCount ?? 0)),
+      metGoal
+    };
+  });
+
+  const { payoutMap, qualifiedCount, totalPotCents } = buildPayoutMap(
+    participantSnapshots,
+    stakeCents
+  );
+  const participantSnapshotsWithPayout = participantSnapshots.map((participant) => ({
+    ...participant,
+    amountWonCents: Math.max(0, Number(payoutMap.get(participant.userId) ?? 0))
+  }));
+  const participantsSnapshotJson = JSON.stringify(participantSnapshotsWithPayout);
+  const cycleStartsAt = cycleWindow.startsAt.toISOString();
+  const cycleEndsAt = cycleWindow.endsAt.toISOString();
+  const settledAtIso = settledAt.toISOString();
+  let inserted = 0;
+
+  for (const participant of participantSnapshotsWithPayout) {
+    const rowId = randomUUID();
+    try {
+      await pool.query(
+        `
+          INSERT INTO member_settlement_logs (
+            id,
+            user_id,
+            group_id_snapshot,
+            group_name_snapshot,
+            goal_cycle_snapshot,
+            goal_start_day_snapshot,
+            application_goal_snapshot,
+            stake_usd_snapshot,
+            cycle_key_snapshot,
+            cycle_label_snapshot,
+            cycle_starts_at,
+            cycle_ends_at,
+            settled_at,
+            participant_count,
+            qualified_participant_count,
+            pot_value_cents_snapshot,
+            amount_won_cents,
+            applications_count_snapshot,
+            met_goal_snapshot,
+            participants_snapshot_json
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+        `,
+        [
+          rowId,
+          participant.userId,
+          group.id,
+          group.name,
+          goalCycle,
+          goalStartDay,
+          applicationGoal,
+          stakeUsd,
+          cycleWindow.cycleKey,
+          cycleWindow.label,
+          cycleStartsAt,
+          cycleEndsAt,
+          settledAtIso,
+          participantSnapshotsWithPayout.length,
+          qualifiedCount,
+          totalPotCents,
+          participant.amountWonCents,
+          participant.applicationsCount,
+          participant.metGoal,
+          participantsSnapshotJson
+        ]
+      );
+      inserted += 1;
+    } catch (error) {
+      if (!isDuplicateInsertError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  return inserted;
+}
+
+async function ensureSettlementLogsForGroup(group) {
+  const cycleKeys = await listCycleKeysForGroup(group.id);
+  if (!cycleKeys.length) {
+    return 0;
+  }
+
+  const parsed = cycleKeys
+    .map((cycleKey) => cycleWindowFromCycleKey(cycleKey))
+    .filter((window) => window !== null)
+    .sort((left, right) => left.startsAt.getTime() - right.startsAt.getTime());
+
+  let inserted = 0;
+  for (const cycleWindow of parsed) {
+    inserted += await appendSettlementLogsForGroupCycle(group, cycleWindow);
+  }
+  return inserted;
+}
+
+async function ensureSettlementLogsForUser(userId) {
+  const result = await pool.query(
+    `
+      SELECT g.*
+      FROM app_groups g
+      INNER JOIN group_members gm
+        ON gm.group_id = g.id
+      WHERE gm.user_id = $1
+      ORDER BY g.created_at DESC
+    `,
+    [userId]
+  );
+
+  for (const group of result.rows) {
+    await ensureSettlementLogsForGroup(group);
+  }
+}
+
+async function listSettlementLogsForUser(userId, limit = 500) {
+  const safeLimit = Math.max(1, Math.min(1000, Number(limit) || 500));
+  const result = await pool.query(
+    `
+      SELECT
+        id,
+        user_id,
+        group_id_snapshot,
+        group_name_snapshot,
+        goal_cycle_snapshot,
+        goal_start_day_snapshot,
+        application_goal_snapshot,
+        stake_usd_snapshot,
+        cycle_key_snapshot,
+        cycle_label_snapshot,
+        cycle_starts_at,
+        cycle_ends_at,
+        settled_at,
+        participant_count,
+        qualified_participant_count,
+        pot_value_cents_snapshot,
+        amount_won_cents,
+        applications_count_snapshot,
+        met_goal_snapshot,
+        participants_snapshot_json
+      FROM member_settlement_logs
+      WHERE user_id = $1
+        AND participant_count > 1
+      ORDER BY settled_at DESC, created_at DESC
+      LIMIT $2
+    `,
+    [userId, safeLimit]
+  );
+
+  return result.rows
+    .map((row) => toSettlementLog(row))
+    .filter((entry) => settlementHasMultipleUniqueParticipants(entry));
 }
 
 async function createEmailUser({ email, password, firstName, lastName, timezone }) {
@@ -3221,6 +3720,12 @@ app.patch("/api/groups/:groupId/settings", authMiddleware, async (req, res) => {
       });
     }
 
+    const currentGroup = await getGroupByIdForMember(groupId, userId);
+    if (!currentGroup) {
+      return res.status(404).json({ error: "Group not found." });
+    }
+    await ensureSettlementLogsForGroup(currentGroup);
+
     await pool.query(
       `
         UPDATE app_groups
@@ -3321,6 +3826,12 @@ app.delete("/api/groups/:groupId", authMiddleware, async (req, res) => {
       return res.status(403).json({ error: "Only admins can delete groups." });
     }
 
+    const group = await getGroupByIdForMember(groupId, userId);
+    if (!group) {
+      return res.status(404).json({ error: "Group not found." });
+    }
+    await ensureSettlementLogsForGroup(group);
+
     const deleted = await pool.query(
       `
         DELETE FROM app_groups
@@ -3336,6 +3847,48 @@ app.delete("/api/groups/:groupId", authMiddleware, async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       error: error instanceof Error ? error.message : "Unable to delete group."
+    });
+  }
+});
+
+app.post("/api/groups/:groupId/leave", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    if (!userId) {
+      return res.status(401).json({ error: "Missing user identity." });
+    }
+
+    const groupId = String(req.params.groupId ?? "").trim();
+    if (!groupId) {
+      return res.status(400).json({ error: "Group id is required." });
+    }
+
+    const role = await getGroupMemberRole(groupId, userId);
+    if (!role) {
+      return res.status(404).json({ error: "Group not found." });
+    }
+    if (role === "admin") {
+      return res.status(403).json({
+        error: "Admins cannot leave a group. Delete the group instead."
+      });
+    }
+
+    const removed = await pool.query(
+      `
+        DELETE FROM group_members
+        WHERE group_id = $1
+          AND user_id = $2
+      `,
+      [groupId, userId]
+    );
+    if (Number(removed.rowCount ?? 0) === 0) {
+      return res.status(404).json({ error: "Membership not found." });
+    }
+
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to leave group."
     });
   }
 });
@@ -3457,6 +4010,23 @@ app.get("/api/applications/counter-logs", authMiddleware, async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       error: error instanceof Error ? error.message : "Unable to fetch application logs."
+    });
+  }
+});
+
+app.get("/api/settlements/logs", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    if (!userId) {
+      return res.status(401).json({ error: "Missing user identity." });
+    }
+
+    await ensureSettlementLogsForUser(userId);
+    const logs = await listSettlementLogsForUser(userId, 500);
+    return res.status(200).json({ logs });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to fetch settlement logs."
     });
   }
 });

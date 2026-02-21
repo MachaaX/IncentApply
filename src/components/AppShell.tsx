@@ -9,12 +9,13 @@ export function AppShell() {
     location.pathname === "/my-groups/create" || location.pathname === "/my-groups/join";
   const walletPage = location.pathname === "/wallet";
   const applicationsPage = location.pathname === "/applications";
+  const settlementsPage = location.pathname === "/settlements";
 
   const mainClassName = noScrollMyGroupsPage
     ? "pb-24 pt-4 lg:h-[calc(100dvh-5rem)] lg:overflow-hidden lg:pb-4"
     : walletPage
       ? "pb-24 pt-4 lg:h-[calc(100dvh-5rem)] lg:overflow-hidden lg:pb-4"
-      : applicationsPage
+      : applicationsPage || settlementsPage
         ? "h-[calc(100dvh-5rem)] overflow-hidden pb-24 pt-4 lg:pb-4"
       : "pb-24 pt-6";
 
