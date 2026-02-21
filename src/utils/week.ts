@@ -1,20 +1,21 @@
 import type { WeekWindow } from "../domain/types";
 import {
   addUtcCalendarDays,
-  APP_TIME_ZONE,
+  getActiveTimeZone,
   getZonedParts,
+  normalizeTimeZone,
   utcCalendarDateYmd,
   zonedLocalToUtc
 } from "./timezone";
 
 const FRIDAY = 5;
 
-function resolveTimezone(): string {
-  return APP_TIME_ZONE;
+function resolveTimezone(value?: string): string {
+  return normalizeTimeZone(value, getActiveTimeZone());
 }
 
-export function getWeekWindow(now: Date, _timezone: string): WeekWindow {
-  const timezone = resolveTimezone();
+export function getWeekWindow(now: Date, timezoneInput: string): WeekWindow {
+  const timezone = resolveTimezone(timezoneInput);
   const zonedNow = getZonedParts(now, timezone);
   const localCalendarDay = new Date(Date.UTC(zonedNow.year, zonedNow.month - 1, zonedNow.day));
   const weekday = localCalendarDay.getUTCDay();
@@ -43,13 +44,13 @@ export function getWeekWindow(now: Date, _timezone: string): WeekWindow {
   };
 }
 
-export function getTimeRemainingToSettlement(now: Date, _timezone: string): {
+export function getTimeRemainingToSettlement(now: Date, timezoneInput: string): {
   totalMs: number;
   days: number;
   hours: number;
   minutes: number;
 } {
-  const timezone = resolveTimezone();
+  const timezone = resolveTimezone(timezoneInput);
   const window = getWeekWindow(now, timezone);
   const endsAt = new Date(window.endsAt).getTime();
   const totalMs = Math.max(0, endsAt - now.getTime());

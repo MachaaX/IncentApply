@@ -56,6 +56,7 @@ const users: User[] = [
     firstName: "Alex",
     lastName: "D",
     email: "alex@incentapply.dev",
+    timezone,
     role: "owner",
     walletId: "wallet-alex",
     groupId: "group-1"
@@ -65,6 +66,7 @@ const users: User[] = [
     firstName: "Sarah",
     lastName: "M",
     email: "sarah@incentapply.dev",
+    timezone,
     role: "member",
     walletId: "wallet-sarah",
     groupId: "group-1"
@@ -74,6 +76,7 @@ const users: User[] = [
     firstName: "Marcus",
     lastName: "J",
     email: "marcus@incentapply.dev",
+    timezone,
     role: "member",
     walletId: "wallet-marcus",
     groupId: "group-1"
@@ -83,6 +86,7 @@ const users: User[] = [
     firstName: "Elena",
     lastName: "R",
     email: "elena@incentapply.dev",
+    timezone,
     role: "member",
     walletId: "wallet-elena",
     groupId: "group-1"
@@ -92,6 +96,7 @@ const users: User[] = [
     firstName: "David",
     lastName: "K",
     email: "david@incentapply.dev",
+    timezone,
     role: "member",
     walletId: "wallet-david",
     groupId: "group-1"

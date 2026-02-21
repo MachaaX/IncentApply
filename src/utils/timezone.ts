@@ -1,4 +1,39 @@
 export const APP_TIME_ZONE = "America/New_York";
+let activeTimeZone = APP_TIME_ZONE;
+
+export function isValidTimeZone(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function normalizeTimeZone(value: unknown, fallback: string = APP_TIME_ZONE): string {
+  return isValidTimeZone(value) ? String(value).trim() : fallback;
+}
+
+export function detectBrowserTimeZone(fallback: string = APP_TIME_ZONE): string {
+  const browserTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return normalizeTimeZone(browserTimeZone, fallback);
+}
+
+export function getActiveTimeZone(): string {
+  return activeTimeZone;
+}
+
+export function setActiveTimeZone(value: string | null | undefined): string {
+  activeTimeZone = normalizeTimeZone(value, APP_TIME_ZONE);
+  return activeTimeZone;
+}
 
 interface ZonedParts {
   year: number;
@@ -84,4 +119,3 @@ export function utcCalendarDateYmd(value: Date): string {
 export function utcCalendarEpoch(value: Date): number {
   return Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate());
 }
-

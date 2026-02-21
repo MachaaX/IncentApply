@@ -1,6 +1,6 @@
 import type { MockState } from "../domain/types";
 import { createSeedState } from "./data/seed";
-import { APP_TIME_ZONE } from "../utils/timezone";
+import { APP_TIME_ZONE, normalizeTimeZone } from "../utils/timezone";
 
 const STORAGE_KEY = "incentapply-state-v1";
 
@@ -13,6 +13,10 @@ function canUseLocalStorage(): boolean {
 function normalizeTimezone(state: MockState): MockState {
   const withCounterLogs: MockState = {
     ...state,
+    users: state.users.map((user) => ({
+      ...user,
+      timezone: normalizeTimeZone((user as { timezone?: string }).timezone, APP_TIME_ZONE)
+    })),
     counterApplicationLogs: Array.isArray(state.counterApplicationLogs)
       ? state.counterApplicationLogs
       : []

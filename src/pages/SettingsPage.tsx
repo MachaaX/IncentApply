@@ -1,6 +1,7 @@
 import { type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "../app/AuthContext";
+import { detectBrowserTimeZone, isValidTimeZone, normalizeTimeZone } from "../utils/timezone";
 
 type SettingsSection = "profile" | "security" | "notifications";
 const MAX_AVATAR_FILE_BYTES = 4 * 1024 * 1024;
@@ -98,6 +99,18 @@ function initialsFromNames(firstName: string, lastName: string): string {
   return initials || "U";
 }
 
+function getSupportedTimeZones(): string[] {
+  const intlWithSupportedValues = Intl as typeof Intl & {
+    supportedValuesOf?: (key: "timeZone") => string[];
+  };
+  const fromIntl =
+    typeof intlWithSupportedValues.supportedValuesOf === "function"
+      ? intlWithSupportedValues.supportedValuesOf("timeZone")
+      : [];
+  const unique = new Set(fromIntl.map((value) => value.trim()).filter((value) => isValidTimeZone(value)));
+  return [...unique].sort((left, right) => left.localeCompare(right));
+}
+
 export function SettingsPage() {
   const navigate = useNavigate();
   const { section: routeSection } = useParams<{ section?: string }>();
@@ -108,10 +121,19 @@ export function SettingsPage() {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
+  const [timezone, setTimezone] = useState("");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [profileStatus, setProfileStatus] = useState<string | null>(null);
   const [profileStatusTone, setProfileStatusTone] = useState<"success" | "warning">("success");
+  const detectedTimeZone = useMemo(() => detectBrowserTimeZone(), []);
+  const timeZoneOptions = useMemo(() => {
+    const options = getSupportedTimeZones();
+    if (timezone && isValidTimeZone(timezone) && !options.includes(timezone)) {
+      return [timezone, ...options];
+    }
+    return options;
+  }, [timezone]);
 
   const [mfaEnabled, setMfaEnabled] = useState(false);
   const [securityStatus, setSecurityStatus] = useState<string | null>(null);
@@ -129,8 +151,9 @@ export function SettingsPage() {
     setFirstName(user?.firstName ?? "");
     setLastName(user?.lastName ?? "");
     setEmail(user?.email ?? "");
+    setTimezone(normalizeTimeZone(user?.timezone, detectedTimeZone));
     setAvatarUrl(user?.avatarUrl?.trim() ? user.avatarUrl.trim() : null);
-  }, [user?.avatarUrl, user?.email, user?.firstName, user?.lastName]);
+  }, [detectedTimeZone, user?.avatarUrl, user?.email, user?.firstName, user?.lastName, user?.timezone]);
 
   const activeSection = useMemo(
     () => settingsSections.find((entry) => entry.id === section) ?? settingsSections[0],
@@ -141,6 +164,7 @@ export function SettingsPage() {
     const trimmedFirstName = firstName.trim();
     const trimmedLastName = lastName.trim();
     const trimmedEmail = email.trim().toLowerCase();
+    const trimmedTimeZone = timezone.trim();
     if (!trimmedFirstName || !trimmedLastName || !trimmedEmail) {
       setProfileStatusTone("warning");
       setProfileStatus("First name, last name, and email are required.");
@@ -151,6 +175,11 @@ export function SettingsPage() {
       setProfileStatus("Please enter a valid email address.");
       return;
     }
+    if (!trimmedTimeZone || !isValidTimeZone(trimmedTimeZone)) {
+      setProfileStatusTone("warning");
+      setProfileStatus("Please enter a valid IANA timezone (example: America/New_York).");
+      return;
+    }
 
     setIsSavingProfile(true);
     setProfileStatus(null);
@@ -159,7 +188,8 @@ export function SettingsPage() {
         firstName: trimmedFirstName,
         lastName: trimmedLastName,
         email: trimmedEmail,
-        avatarUrl
+        avatarUrl,
+        timezone: trimmedTimeZone
       });
       setProfileStatusTone("success");
       setProfileStatus("Profile settings saved.");
@@ -175,6 +205,7 @@ export function SettingsPage() {
     setFirstName(user?.firstName ?? "");
     setLastName(user?.lastName ?? "");
     setEmail(user?.email ?? "");
+    setTimezone(normalizeTimeZone(user?.timezone, detectedTimeZone));
     setAvatarUrl(user?.avatarUrl?.trim() ? user.avatarUrl.trim() : null);
     setProfileStatus(null);
   };
@@ -327,6 +358,37 @@ export function SettingsPage() {
                     type="email"
                   />
                 </label>
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-white">Time Zone</span>
+                  <select
+                    value={timezone}
+                    onChange={(event) => setTimezone(event.target.value)}
+                    className={`${formInputClass()} appearance-none`}
+                  >
+                    {timeZoneOptions.map((entry) => (
+                      <option key={entry} value={entry}>
+                        {entry}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-slate-400">
+                    All timestamps are rendered using this timezone.
+                  </p>
+                </label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = detectBrowserTimeZone();
+                      setTimezone(next);
+                      setProfileStatusTone("success");
+                      setProfileStatus("Timezone reset to current device timezone.");
+                    }}
+                    className="rounded-lg border border-primary/25 px-3 py-1.5 text-xs font-semibold text-slate-200 transition-colors hover:border-primary/40 hover:text-white"
+                  >
+                    Use Current Device Timezone ({detectedTimeZone})
+                  </button>
+                </div>
                 <div className="flex flex-wrap items-center gap-2 pt-1">
                   <button
                     type="button"

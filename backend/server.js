@@ -197,6 +197,7 @@ async function createMySqlPool(connectionString) {
   const mysqlPool = mysqlDriver.createPool({
     uri: connectionString,
     ssl,
+    timezone: "Z",
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
@@ -406,6 +407,7 @@ async function initDb() {
         first_name VARCHAR(191),
         last_name VARCHAR(191),
         avatar_url TEXT,
+        timezone VARCHAR(64) NOT NULL DEFAULT '${APP_TIME_ZONE}',
         auth_provider VARCHAR(32) NOT NULL DEFAULT 'email',
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -423,6 +425,27 @@ async function initDb() {
     if (Number(entraColumn.rows[0]?.count ?? 0) === 0) {
       await pool.query("ALTER TABLE users ADD COLUMN entra_sub VARCHAR(191) UNIQUE NULL");
     }
+
+    const timezoneColumn = await pool.query(`
+      SELECT COUNT(*) AS count
+      FROM information_schema.columns
+      WHERE table_schema = DATABASE()
+        AND table_name = 'users'
+        AND column_name = 'timezone'
+    `);
+
+    if (Number(timezoneColumn.rows[0]?.count ?? 0) === 0) {
+      await pool.query(
+        `ALTER TABLE users ADD COLUMN timezone VARCHAR(64) NOT NULL DEFAULT '${APP_TIME_ZONE}'`
+      );
+    }
+
+    await pool.query(
+      `UPDATE users SET timezone = '${APP_TIME_ZONE}' WHERE timezone IS NULL OR TRIM(timezone) = ''`
+    );
+    await pool.query(
+      `ALTER TABLE users MODIFY COLUMN timezone VARCHAR(64) NOT NULL DEFAULT '${APP_TIME_ZONE}'`
+    );
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS app_groups (
@@ -548,6 +571,7 @@ async function initDb() {
       first_name TEXT,
       last_name TEXT,
       avatar_url TEXT,
+      timezone TEXT NOT NULL DEFAULT '${APP_TIME_ZONE}',
       auth_provider TEXT NOT NULL DEFAULT 'email',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -562,6 +586,22 @@ async function initDb() {
   await pool.query(`
     ALTER TABLE users
     ADD COLUMN IF NOT EXISTS entra_sub TEXT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS timezone TEXT;
+  `);
+
+  await pool.query(
+    `UPDATE users SET timezone = '${APP_TIME_ZONE}' WHERE timezone IS NULL OR BTRIM(timezone) = ''`
+  );
+  await pool.query(
+    `ALTER TABLE users ALTER COLUMN timezone SET DEFAULT '${APP_TIME_ZONE}'`
+  );
+  await pool.query(`
+    ALTER TABLE users
+    ALTER COLUMN timezone SET NOT NULL;
   `);
 
   await pool.query(`
@@ -688,6 +728,29 @@ function normalizeEmail(email) {
   return email.trim().toLowerCase();
 }
 
+function isValidTimeZone(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeUserTimeZone(value, fallback = APP_TIME_ZONE) {
+  if (!isValidTimeZone(value)) {
+    return fallback;
+  }
+  return String(value).trim();
+}
+
 function isValidAvatarUrl(value) {
   const trimmed = String(value ?? "").trim();
   if (!trimmed) {
@@ -759,6 +822,7 @@ function buildAuthResponse(user) {
       firstName: user.first_name,
       lastName: user.last_name,
       avatarUrl: user.avatar_url,
+      timezone: normalizeUserTimeZone(user.timezone),
       authProvider: user.auth_provider,
       createdAt: user.created_at
     }
@@ -1556,19 +1620,20 @@ async function removeRecentCounterApplicationLogs({
   return ids.length;
 }
 
-async function createEmailUser({ email, password, firstName, lastName }) {
+async function createEmailUser({ email, password, firstName, lastName, timezone }) {
   const passwordHash = await hash(password, PASSWORD_HASH_OPTIONS);
   const id = randomUUID();
+  const normalizedTimeZone = normalizeUserTimeZone(timezone);
 
   if (poolMode === "mysql") {
     await pool.query(
       `
         INSERT INTO users (
-          id, email, password_hash, first_name, last_name, auth_provider
+          id, email, password_hash, first_name, last_name, timezone, auth_provider
         )
-        VALUES ($1, $2, $3, $4, $5, 'email')
+        VALUES ($1, $2, $3, $4, $5, $6, 'email')
       `,
-      [id, email, passwordHash, firstName, lastName]
+      [id, email, passwordHash, firstName, lastName, normalizedTimeZone]
     );
     return requireUserById(id);
   }
@@ -1576,12 +1641,12 @@ async function createEmailUser({ email, password, firstName, lastName }) {
   const result = await pool.query(
     `
       INSERT INTO users (
-        id, email, password_hash, first_name, last_name, auth_provider
+        id, email, password_hash, first_name, last_name, timezone, auth_provider
       )
-      VALUES ($1, $2, $3, $4, $5, 'email')
+      VALUES ($1, $2, $3, $4, $5, $6, 'email')
       RETURNING *
     `,
-    [id, email, passwordHash, firstName, lastName]
+    [id, email, passwordHash, firstName, lastName, normalizedTimeZone]
   );
 
   return result.rows[0] ?? null;
@@ -1627,6 +1692,7 @@ async function upsertGoogleUser(payload, options = {}) {
 
   const email = normalizeEmail(payload.email);
   const googleSub = payload.sub;
+  const normalizedTimeZone = normalizeUserTimeZone(options.timezone);
 
   const byGoogleSub = await getUserByGoogleSub(googleSub);
   if (byGoogleSub) {
@@ -1672,9 +1738,9 @@ async function upsertGoogleUser(payload, options = {}) {
     await pool.query(
       `
         INSERT INTO users (
-          id, email, google_sub, first_name, last_name, avatar_url, auth_provider
+          id, email, google_sub, first_name, last_name, avatar_url, timezone, auth_provider
         )
-        VALUES ($1, $2, $3, $4, $5, $6, 'google')
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'google')
       `,
       [
         id,
@@ -1682,7 +1748,8 @@ async function upsertGoogleUser(payload, options = {}) {
         googleSub,
         payload.given_name ?? null,
         payload.family_name ?? null,
-        payload.picture ?? null
+        payload.picture ?? null,
+        normalizedTimeZone
       ]
     );
     return requireUserById(id);
@@ -1691,9 +1758,9 @@ async function upsertGoogleUser(payload, options = {}) {
   const created = await pool.query(
     `
       INSERT INTO users (
-        id, email, google_sub, first_name, last_name, avatar_url, auth_provider
+        id, email, google_sub, first_name, last_name, avatar_url, timezone, auth_provider
       )
-      VALUES ($1, $2, $3, $4, $5, $6, 'google')
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'google')
       RETURNING *
     `,
     [
@@ -1702,7 +1769,8 @@ async function upsertGoogleUser(payload, options = {}) {
       googleSub,
       payload.given_name ?? null,
       payload.family_name ?? null,
-      payload.picture ?? null
+      payload.picture ?? null,
+      normalizedTimeZone
     ]
   );
 
@@ -1987,7 +2055,8 @@ function createGoogleAuthUrl(
   redirectPath = "/dashboard",
   mode = "redirect",
   intent = "login",
-  redirectUri = GOOGLE_REDIRECT_URI
+  redirectUri = GOOGLE_REDIRECT_URI,
+  timezone = APP_TIME_ZONE
 ) {
   if (!oauthClient) {
     throw new Error(getGoogleOAuthNotConfiguredMessage());
@@ -1999,11 +2068,13 @@ function createGoogleAuthUrl(
       : "/dashboard";
   const normalizedMode = mode === "popup" ? "popup" : "redirect";
   const normalizedIntent = intent === "signup" ? "signup" : "login";
+  const normalizedTimeZone = normalizeUserTimeZone(timezone);
   const state = Buffer.from(
     JSON.stringify({
       redirectPath: normalizedRedirectPath,
       mode: normalizedMode,
-      intent: normalizedIntent
+      intent: normalizedIntent,
+      timezone: normalizedTimeZone
     }),
     "utf-8"
   ).toString("base64url");
@@ -2053,9 +2124,10 @@ function parseOAuthState(stateEncoded) {
   let redirectPath = "/dashboard";
   let mode = "redirect";
   let intent = "login";
+  let timezone = APP_TIME_ZONE;
 
   if (!stateEncoded) {
-    return { redirectPath, mode, intent };
+    return { redirectPath, mode, intent, timezone };
   }
 
   try {
@@ -2072,11 +2144,15 @@ function parseOAuthState(stateEncoded) {
     if (parsed.intent === "signup") {
       intent = "signup";
     }
+
+    if (typeof parsed.timezone === "string" && isValidTimeZone(parsed.timezone)) {
+      timezone = parsed.timezone.trim();
+    }
   } catch {
     // Ignore invalid state payloads and fall back to defaults.
   }
 
-  return { redirectPath, mode, intent };
+  return { redirectPath, mode, intent, timezone };
 }
 
 function isLocalFrontendUrl(value) {
@@ -2249,7 +2325,7 @@ app.get("/api/health", async (_, res) => {
 
 app.post("/api/auth/signup", async (req, res) => {
   try {
-    const { email, password, firstName, lastName } = req.body ?? {};
+    const { email, password, firstName, lastName, timezone } = req.body ?? {};
 
     if (!email || !password) {
       return res.status(400).json({ error: "Email and password are required." });
@@ -2273,7 +2349,8 @@ app.post("/api/auth/signup", async (req, res) => {
           email: normalized,
           password: String(password),
           firstName: firstName ? String(firstName) : null,
-          lastName: lastName ? String(lastName) : null
+          lastName: lastName ? String(lastName) : null,
+          timezone: normalizeUserTimeZone(timezone)
         });
 
     return res.status(201).json(buildAuthResponse(user));
@@ -2311,8 +2388,12 @@ app.get("/api/auth/google/start", async (req, res) => {
       typeof req.query.redirect === "string" ? req.query.redirect : "/dashboard";
     const mode = req.query.mode === "popup" ? "popup" : "redirect";
     const intent = req.query.intent === "signup" ? "signup" : "login";
+    const timezone =
+      typeof req.query.timezone === "string"
+        ? normalizeUserTimeZone(req.query.timezone)
+        : APP_TIME_ZONE;
     const redirectUri = resolveGoogleRedirectUri(req);
-    const url = createGoogleAuthUrl(redirectPath, mode, intent, redirectUri);
+    const url = createGoogleAuthUrl(redirectPath, mode, intent, redirectUri, timezone);
     return res.redirect(302, url);
   } catch (error) {
     const statusCode = error instanceof HttpError ? error.statusCode : 500;
@@ -2328,8 +2409,12 @@ app.get("/api/auth/google/url", async (req, res) => {
       typeof req.query.redirect === "string" ? req.query.redirect : "/dashboard";
     const mode = req.query.mode === "popup" ? "popup" : "redirect";
     const intent = req.query.intent === "signup" ? "signup" : "login";
+    const timezone =
+      typeof req.query.timezone === "string"
+        ? normalizeUserTimeZone(req.query.timezone)
+        : APP_TIME_ZONE;
     const redirectUri = resolveGoogleRedirectUri(req);
-    const url = createGoogleAuthUrl(redirectPath, mode, intent, redirectUri);
+    const url = createGoogleAuthUrl(redirectPath, mode, intent, redirectUri, timezone);
 
     return res.status(200).json({ url });
   } catch (error) {
@@ -2342,7 +2427,7 @@ app.get("/api/auth/google/url", async (req, res) => {
 
 app.post("/api/auth/google/exchange", async (req, res) => {
   try {
-    const { code, intent } = req.body ?? {};
+    const { code, intent, timezone } = req.body ?? {};
     if (!code) {
       return res.status(400).json({ error: "Google authorization code is required." });
     }
@@ -2351,7 +2436,8 @@ app.post("/api/auth/google/exchange", async (req, res) => {
     const redirectUri = resolveGoogleRedirectUri(req);
     const user = await exchangeGoogleCode(String(code), {
       intent: normalizedIntent,
-      redirectUri
+      redirectUri,
+      timezone: normalizeUserTimeZone(timezone)
     });
     return res.status(200).json(buildAuthResponse(user));
   } catch (error) {
@@ -2397,7 +2483,8 @@ app.get("/api/auth/google/callback", async (req, res) => {
 
     const user = await exchangeGoogleCode(code, {
       intent: oauthState.intent,
-      redirectUri
+      redirectUri,
+      timezone: oauthState.timezone
     });
     const auth = buildAuthResponse(user);
 
@@ -2561,6 +2648,7 @@ app.get("/api/auth/me", authMiddleware, async (req, res) => {
         firstName: user.first_name,
         lastName: user.last_name,
         avatarUrl: user.avatar_url,
+        timezone: normalizeUserTimeZone(user.timezone),
         authProvider: user.auth_provider,
         createdAt: user.created_at
       }
@@ -2582,6 +2670,8 @@ app.patch("/api/auth/me", authMiddleware, async (req, res) => {
     const emailRaw = typeof req.body?.email === "string" ? req.body.email : "";
     const hasAvatarUrlField = Object.prototype.hasOwnProperty.call(req.body ?? {}, "avatarUrl");
     const avatarUrlRaw = hasAvatarUrlField ? req.body?.avatarUrl : undefined;
+    const hasTimezoneField = Object.prototype.hasOwnProperty.call(req.body ?? {}, "timezone");
+    const timezoneRaw = hasTimezoneField ? req.body?.timezone : undefined;
 
     const firstName = firstNameRaw.trim();
     const lastName = lastNameRaw.trim();
@@ -2594,6 +2684,12 @@ app.patch("/api/auth/me", authMiddleware, async (req, res) => {
           : typeof avatarUrlRaw === "string"
             ? avatarUrlRaw.trim()
             : "__invalid__";
+    const timezone =
+      timezoneRaw === undefined
+        ? undefined
+        : typeof timezoneRaw === "string"
+          ? timezoneRaw.trim()
+          : "__invalid__";
 
     if (!firstName || !lastName || !email) {
       return res
@@ -2616,38 +2712,39 @@ app.patch("/api/auth/me", authMiddleware, async (req, res) => {
           "Avatar image is invalid or too large. Upload a smaller image (PNG/JPG/WEBP/GIF)."
       });
     }
+    if (timezone === "__invalid__") {
+      return res.status(400).json({ error: "Timezone must be a valid IANA timezone string." });
+    }
+    if (typeof timezone === "string" && !isValidTimeZone(timezone)) {
+      return res.status(400).json({ error: "Timezone must be a valid IANA timezone string." });
+    }
 
     const existingWithEmail = await getUserByEmail(email);
     if (existingWithEmail && existingWithEmail.id !== userId) {
       return res.status(409).json({ error: "An account already exists with this email." });
     }
 
+    const setClauses = ["first_name = $2", "last_name = $3", "email = $4"];
+    const params = [userId, firstName, lastName, email];
+
     if (hasAvatarUrlField) {
-      await pool.query(
-        `
-          UPDATE users
-          SET first_name = $2,
-              last_name = $3,
-              email = $4,
-              avatar_url = $5,
-              updated_at = NOW()
-          WHERE id = $1
-        `,
-        [userId, firstName, lastName, email, avatarUrl && avatarUrl.length ? avatarUrl : null]
-      );
-    } else {
-      await pool.query(
-        `
-          UPDATE users
-          SET first_name = $2,
-              last_name = $3,
-              email = $4,
-              updated_at = NOW()
-          WHERE id = $1
-        `,
-        [userId, firstName, lastName, email]
-      );
+      setClauses.push(`avatar_url = $${params.length + 1}`);
+      params.push(avatarUrl && avatarUrl.length ? avatarUrl : null);
     }
+    if (hasTimezoneField) {
+      setClauses.push(`timezone = $${params.length + 1}`);
+      params.push(normalizeUserTimeZone(timezone));
+    }
+    setClauses.push("updated_at = NOW()");
+
+    await pool.query(
+      `
+        UPDATE users
+        SET ${setClauses.join(", ")}
+        WHERE id = $1
+      `,
+      params
+    );
 
     const updatedUser = await getUserById(userId);
     if (!updatedUser) {
@@ -2661,6 +2758,7 @@ app.patch("/api/auth/me", authMiddleware, async (req, res) => {
         firstName: updatedUser.first_name,
         lastName: updatedUser.last_name,
         avatarUrl: updatedUser.avatar_url,
+        timezone: normalizeUserTimeZone(updatedUser.timezone),
         authProvider: updatedUser.auth_provider,
         createdAt: updatedUser.created_at
       }

@@ -1,4 +1,4 @@
-import { APP_TIME_ZONE } from "./timezone";
+import { getActiveTimeZone } from "./timezone";
 
 export function centsToUsd(cents: number): string {
   return new Intl.NumberFormat("en-US", {
@@ -10,7 +10,7 @@ export function centsToUsd(cents: number): string {
 
 export function dateLabel(value: string): string {
   return new Intl.DateTimeFormat("en-US", {
-    timeZone: APP_TIME_ZONE,
+    timeZone: getActiveTimeZone(),
     month: "short",
     day: "2-digit",
     year: "numeric"
@@ -19,7 +19,7 @@ export function dateLabel(value: string): string {
 
 export function dateTimeLabel(value: string): string {
   return new Intl.DateTimeFormat("en-US", {
-    timeZone: APP_TIME_ZONE,
+    timeZone: getActiveTimeZone(),
     month: "short",
     day: "2-digit",
     hour: "2-digit",
@@ -29,7 +29,7 @@ export function dateTimeLabel(value: string): string {
 
 export function dateTimeWithYearLabel(value: string): string {
   return new Intl.DateTimeFormat("en-US", {
-    timeZone: APP_TIME_ZONE,
+    timeZone: getActiveTimeZone(),
     month: "numeric",
     day: "numeric",
     year: "numeric",

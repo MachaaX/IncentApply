@@ -8,6 +8,7 @@ export interface User {
   lastName: string;
   email: string;
   avatarUrl?: string;
+  timezone: string;
   role: Role;
   walletId: string;
   groupId: string;

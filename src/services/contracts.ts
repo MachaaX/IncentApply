@@ -29,6 +29,7 @@ export interface AuthService {
     lastName: string;
     email: string;
     avatarUrl?: string | null;
+    timezone?: string;
   }): Promise<User>;
   loginWithGoogle(email?: string): Promise<AuthSession>;
   registerWithGoogle(email?: string): Promise<AuthSession>;

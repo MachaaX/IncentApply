@@ -33,6 +33,10 @@ import { maskRouting } from "../../utils/format";
 import {
   addUtcCalendarDays,
   APP_TIME_ZONE,
+  detectBrowserTimeZone,
+  getActiveTimeZone,
+  getZonedParts,
+  normalizeTimeZone,
   toUtcCalendarDate,
   utcCalendarDateYmd,
   utcCalendarEpoch,
@@ -51,6 +55,7 @@ interface BackendUserProfile {
   firstName?: string | null;
   lastName?: string | null;
   avatarUrl?: string | null;
+  timezone?: string | null;
   authProvider?: string | null;
 }
 
@@ -284,8 +289,43 @@ function mapBackendGroupActivity(entry: BackendGroupActivitySnapshot): GroupActi
   };
 }
 
-function mapBackendCounterApplicationLog(entry: BackendCounterApplicationLog): CounterApplicationLog {
+function shiftIsoTimestampByMs(value: string, deltaMs: number): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return new Date(parsed.getTime() + deltaMs).toISOString();
+}
+
+function normalizeLegacyCounterLogTimezoneDrift(entry: CounterApplicationLog): CounterApplicationLog {
+  const startsAt = new Date(entry.cycleStartsAt);
+  if (Number.isNaN(startsAt.getTime())) {
+    return entry;
+  }
+
+  // Counter cycle windows are expected to start at local midnight in app timezone.
+  // If older rows are shifted (e.g., +5h), normalize all log timestamps by that drift.
+  const zoned = getZonedParts(startsAt, APP_TIME_ZONE);
+  let minutesFromMidnight = zoned.hour * 60 + zoned.minute;
+  if (minutesFromMidnight > 12 * 60) {
+    minutesFromMidnight -= 24 * 60;
+  }
+  const driftMs = (minutesFromMidnight * 60 + zoned.second) * 1000;
+
+  if (driftMs === 0) {
+    return entry;
+  }
+
   return {
+    ...entry,
+    cycleStartsAt: shiftIsoTimestampByMs(entry.cycleStartsAt, -driftMs),
+    cycleEndsAt: shiftIsoTimestampByMs(entry.cycleEndsAt, -driftMs),
+    loggedAt: shiftIsoTimestampByMs(entry.loggedAt, -driftMs)
+  };
+}
+
+function mapBackendCounterApplicationLog(entry: BackendCounterApplicationLog): CounterApplicationLog {
+  return normalizeLegacyCounterLogTimezoneDrift({
     id: entry.id,
     userId: entry.userId,
     groupId: entry.groupId,
@@ -300,7 +340,7 @@ function mapBackendCounterApplicationLog(entry: BackendCounterApplicationLog): C
     cycleEndsAt: entry.cycleEndsAt,
     applicationIndex: Math.max(0, Number(entry.applicationIndex ?? 0)),
     loggedAt: entry.loggedAt
-  };
+  });
 }
 
 function getLocalCycleWindow(input: {
@@ -511,6 +551,10 @@ function isValidEmailAddress(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+function getClientTimeZone(): string {
+  return detectBrowserTimeZone(getActiveTimeZone());
+}
+
 function sessionProviderFromAuthProvider(
   provider: BackendUserProfile["authProvider"]
 ): AuthSession["provider"] {
@@ -537,6 +581,7 @@ function ensureLocalUser(profile: {
   firstName?: string | null;
   lastName?: string | null;
   avatarUrl?: string | null;
+  timezone?: string | null;
 }): User {
   let ensuredUser: User | undefined;
 
@@ -552,7 +597,8 @@ function ensureLocalUser(profile: {
         ...existing,
         firstName: profile.firstName ?? existing.firstName ?? defaults.firstName,
         lastName: profile.lastName ?? existing.lastName ?? defaults.lastName,
-        avatarUrl: profile.avatarUrl ?? existing.avatarUrl
+        avatarUrl: profile.avatarUrl ?? existing.avatarUrl,
+        timezone: normalizeTimeZone(profile.timezone, existing.timezone || APP_TIME_ZONE)
       };
       ensuredUser = updatedUser;
 
@@ -587,6 +633,7 @@ function ensureLocalUser(profile: {
       lastName: profile.lastName ?? defaults.lastName,
       avatarUrl: profile.avatarUrl ?? undefined,
       email: profile.email.trim().toLowerCase(),
+      timezone: normalizeTimeZone(profile.timezone, getClientTimeZone()),
       role: "member",
       walletId,
       groupId: current.group.id
@@ -642,7 +689,8 @@ function syncLocalStateFromBackendAuth(auth: BackendAuthResponse): AuthSession {
     email: auth.user.email,
     firstName: auth.user.firstName,
     lastName: auth.user.lastName,
-    avatarUrl: auth.user.avatarUrl
+    avatarUrl: auth.user.avatarUrl,
+    timezone: auth.user.timezone
   });
 
   clearOauthPending();
@@ -776,6 +824,7 @@ function syncLocalUserProfileFromBackend(profile: BackendUserProfile): User {
       firstName: (profile.firstName ?? currentUser.firstName).trim(),
       lastName: (profile.lastName ?? currentUser.lastName).trim(),
       email: normalizedEmail,
+      timezone: normalizeTimeZone(profile.timezone, currentUser.timezone),
       avatarUrl:
         profile.avatarUrl === null
           ? undefined
@@ -798,6 +847,7 @@ function updateLocalUserProfile(input: {
   lastName: string;
   email: string;
   avatarUrl?: string | null;
+  timezone?: string;
 }): User {
   const session = getCurrentSession();
   const trimmedFirstName = input.firstName.trim();
@@ -830,6 +880,10 @@ function updateLocalUserProfile(input: {
       firstName: trimmedFirstName,
       lastName: trimmedLastName,
       email: normalizedEmail,
+      timezone:
+        input.timezone === undefined
+          ? currentUser.timezone
+          : normalizeTimeZone(input.timezone, currentUser.timezone),
       avatarUrl:
         input.avatarUrl === undefined
           ? currentUser.avatarUrl
@@ -1125,6 +1179,7 @@ function localRegisterWithEmail(input: {
     firstName: input.firstName,
     lastName: input.lastName,
     email: input.email,
+    timezone: getClientTimeZone(),
     role: "member",
     walletId,
     groupId: getState().group.id
@@ -1180,11 +1235,13 @@ async function loginWithBackendOAuthProvider(
   }
 
   try {
+    const timezone = getClientTimeZone();
     setOauthPending();
     const query = new URLSearchParams({
       redirect: "/my-groups",
       mode: "redirect",
-      intent
+      intent,
+      timezone
     });
     const payload = await backendRequest<{ url: string }>(
       `/api/auth/${provider}/url?${query.toString()}`,
@@ -1301,9 +1358,10 @@ const authService: AuthService = {
     }
 
     try {
+      const timezone = getClientTimeZone();
       const auth = await backendRequest<BackendAuthResponse>("/api/auth/signup", {
         method: "POST",
-        body: JSON.stringify(input)
+        body: JSON.stringify({ ...input, timezone })
       });
       return withLatency(syncLocalStateFromBackendAuth(auth));
     } catch (error) {

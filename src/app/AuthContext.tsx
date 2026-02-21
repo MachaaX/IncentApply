@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { AuthSession, User } from "../domain/types";
 import { useServices } from "./ServiceContext";
+import { setActiveTimeZone } from "../utils/timezone";
 
 interface AuthContextValue {
   session: AuthSession | null;
@@ -18,6 +19,7 @@ interface AuthContextValue {
     lastName: string;
     email: string;
     avatarUrl?: string | null;
+    timezone?: string;
   }) => Promise<void>;
   signInWithGoogle: (email?: string) => Promise<void>;
   signUpWithGoogle: (email?: string) => Promise<void>;
@@ -54,6 +56,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    setActiveTimeZone(user?.timezone);
+  }, [user?.timezone]);
 
   const signInWithGoogle = useCallback(
     async (email?: string) => {
@@ -137,6 +143,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       lastName: string;
       email: string;
       avatarUrl?: string | null;
+      timezone?: string;
     }) => {
       const updated = await authService.updateProfile(input);
       setUser(updated);
