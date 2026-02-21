@@ -67,9 +67,11 @@ describe("mock services", () => {
     expect(user?.email).toBe(uniqueEmail);
   });
 
-  it("rejects duplicate Google signup attempts", async () => {
-    await expect(
-      services.authService.registerWithGoogle("alex@incentapply.dev")
-    ).rejects.toThrow(/already exists/i);
+  it("treats duplicate Google signup attempts as Google sign in", async () => {
+    const session = await services.authService.registerWithGoogle("alex@incentapply.dev");
+    expect(session.provider).toBe("google");
+
+    const user = await services.authService.getCurrentUser();
+    expect(user?.email).toBe("alex@incentapply.dev");
   });
 });

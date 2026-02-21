@@ -104,13 +104,13 @@ export function TopNav() {
     void myGroupsQuery.refetch();
   }, [groupMenuOpen, myGroupsQuery]);
 
-  const groupsButtonClass = `inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-bold transition-all ${
+  const groupsButtonClass = `inline-flex h-10 shrink-0 items-center gap-2 rounded-lg border px-3 text-sm font-bold transition-all ${
     groupMenuOpen
       ? "border-primary bg-primary/20 text-white shadow-[0_0_0_1px_rgba(17,212,147,0.35),0_8px_18px_rgba(17,212,147,0.2)]"
       : "border-primary/45 bg-[#18372d] text-primary hover:border-primary hover:bg-primary/15 hover:text-white"
   }`;
   const subPageButtonClass = (active: boolean) =>
-    `inline-flex h-10 items-center gap-1.5 rounded-lg px-3 text-sm font-semibold transition-colors ${
+    `inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg px-3 text-sm font-semibold transition-colors ${
       active
         ? "border border-primary bg-primary/15 text-primary"
         : "border border-primary/20 bg-surface-dark text-slate-200 hover:border-primary/40 hover:text-white"
@@ -118,10 +118,10 @@ export function TopNav() {
 
   return (
     <>
-      <header className="sticky top-0 z-10 flex h-20 items-center justify-between border-b border-primary/10 bg-background-dark/85 px-6 backdrop-blur-md">
+      <header className="sticky top-0 z-10 flex h-20 items-center justify-between border-b border-primary/10 bg-background-dark/85 px-3 backdrop-blur-md sm:px-6">
         {isMyGroupsRoute ? (
-          <div className="flex min-w-0 items-center gap-2 pr-2">
-            <div ref={groupMenuRef} className="relative">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 pr-2 sm:gap-2">
+            <div ref={groupMenuRef} className="relative shrink-0">
               <button
                 type="button"
                 onClick={() => setGroupMenuOpen((open) => !open)}
@@ -181,30 +181,32 @@ export function TopNav() {
               ) : null}
             </div>
 
-            <button
-              type="button"
-              onClick={startFreshCreateGroup}
-              className={subPageButtonClass(location.pathname === "/my-groups/create")}
-            >
-              <span className="material-icons text-base">add</span>
-              <span className="whitespace-nowrap">Create Group</span>
-            </button>
+            <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto sm:gap-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <button
+                type="button"
+                onClick={startFreshCreateGroup}
+                className={subPageButtonClass(location.pathname === "/my-groups/create")}
+              >
+                <span className="material-icons text-base">add</span>
+                <span className="whitespace-nowrap">Create Group</span>
+              </button>
 
-            <Link
-              to="/my-groups/join"
-              className={subPageButtonClass(location.pathname === "/my-groups/join")}
-            >
-              <span className="whitespace-nowrap">
-                Join Group{pendingInviteCount > 0 ? ` ${pendingInviteCount}` : ""}
-              </span>
-            </Link>
+              <Link
+                to="/my-groups/join"
+                className={subPageButtonClass(location.pathname === "/my-groups/join")}
+              >
+                <span className="whitespace-nowrap">
+                  Join Group{pendingInviteCount > 0 ? ` ${pendingInviteCount}` : ""}
+                </span>
+              </Link>
+            </div>
           </div>
         ) : isSettingsRoute || isWalletRoute ? (
           <div />
         ) : (
           <h1 className="text-xl font-bold text-white">{title}</h1>
         )}
-        <div className="flex items-center gap-3">
+        <div className="ml-2 flex shrink-0 items-center gap-2 sm:gap-3">
           <button
             type="button"
             onClick={() => setNotificationsOpen((open) => !open)}

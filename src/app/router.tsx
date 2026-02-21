@@ -30,7 +30,7 @@ function ProtectedRoute() {
   }
 
   if (!session) {
-    return <Navigate to="/welcome" replace state={{ from: location.pathname }} />;
+    return <Navigate to="/" replace state={{ from: location.pathname }} />;
   }
 
   return <Outlet />;
@@ -48,14 +48,6 @@ function PublicOnlyRoute() {
   }
 
   return <Outlet />;
-}
-
-function RootRedirect() {
-  const { session, loading } = useAuth();
-  if (loading) {
-    return <p className="p-6 text-sm text-slate-400">Loading app...</p>;
-  }
-  return <Navigate to={session ? "/my-groups" : "/welcome"} replace />;
 }
 
 function MyGroupsIndexPage() {
@@ -128,22 +120,22 @@ function LegacyAuthRedirect({ mode }: { mode: "signup" | "login" }) {
   }
 
   const query = params.toString();
-  const destination = query.length ? `/welcome?${query}` : "/welcome";
+  const destination = query.length ? `/?${query}` : "/";
   return <Navigate to={destination} replace state={location.state} />;
 }
 
 function createAppRouter() {
   return createBrowserRouter([
     {
-      path: "/",
-      element: <RootRedirect />
-    },
-    {
       element: <PublicOnlyRoute />,
       children: [
         {
-          path: "/welcome",
+          path: "/",
           element: <WelcomePage />
+        },
+        {
+          path: "/welcome",
+          element: <Navigate to="/" replace />
         },
         {
           path: "/auth/login",

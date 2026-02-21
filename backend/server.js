@@ -1404,30 +1404,16 @@ async function upsertGoogleUser(payload, options = {}) {
     throw new Error("Google payload missing required fields.");
   }
 
-  const intent = options.intent === "signup" ? "signup" : "login";
   const email = normalizeEmail(payload.email);
   const googleSub = payload.sub;
 
   const byGoogleSub = await getUserByGoogleSub(googleSub);
   if (byGoogleSub) {
-    if (intent === "signup") {
-      throw new HttpError(
-        409,
-        "An account already exists with this Google email. Please log in instead."
-      );
-    }
     return byGoogleSub;
   }
 
   const byEmail = await getUserByEmail(email);
   if (byEmail) {
-    if (intent === "signup") {
-      throw new HttpError(
-        409,
-        "An account already exists with this email. Please log in instead."
-      );
-    }
-
     const nextProvider = byEmail.password_hash || byEmail.entra_sub ? "hybrid" : "google";
 
     if (poolMode === "mysql") {

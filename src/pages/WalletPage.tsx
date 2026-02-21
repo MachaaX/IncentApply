@@ -323,7 +323,7 @@ export function WalletPage() {
 
   return (
     <>
-      <div className="flex h-full min-h-0 flex-col gap-6 overflow-hidden">
+      <div className="flex min-h-0 flex-col gap-6 lg:h-full lg:overflow-hidden">
         <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
             <h1 className="text-3xl font-bold text-white">My Wallet</h1>
@@ -331,7 +331,7 @@ export function WalletPage() {
           </div>
         </header>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-12">
+        <div className="grid grid-cols-1 gap-6 lg:min-h-0 lg:flex-1 lg:grid-cols-12">
           <div className="space-y-5 lg:col-span-5">
             <section className="group relative overflow-hidden rounded-xl border border-primary/15 bg-surface-dark p-6 shadow-lg">
               <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-primary/20 blur-[60px] transition-all duration-700 group-hover:bg-primary/30" />
@@ -433,8 +433,8 @@ export function WalletPage() {
             ) : null}
           </div>
 
-          <div className="flex min-h-0 flex-col lg:col-span-7">
-            <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-primary/15 bg-surface-dark">
+          <div className="flex flex-col lg:min-h-0 lg:col-span-7">
+            <section className="flex flex-col overflow-hidden rounded-xl border border-primary/15 bg-surface-dark lg:min-h-0 lg:flex-1">
               <header className="flex items-center justify-between border-b border-white/5 p-6">
                 <h3 className="font-semibold text-white">Transaction History</h3>
                 <div className="flex gap-2">
@@ -474,7 +474,7 @@ export function WalletPage() {
                 </div>
               </header>
 
-              <div className="custom-scrollbar min-h-0 flex-1 overflow-auto">
+              <div className="custom-scrollbar overflow-auto lg:min-h-0 lg:flex-1">
                 <table className="w-full text-left text-sm">
                   <thead className="bg-surface-darker/50 text-slate-400">
                     <tr>

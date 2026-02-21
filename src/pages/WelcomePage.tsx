@@ -69,6 +69,7 @@ export function WelcomePage() {
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [validationMessage, setValidationMessage] = useState<string | null>(null);
   const [validationBounce, setValidationBounce] = useState(0);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const from = (location.state as { from?: string } | null)?.from ?? "/my-groups";
   const isLoginMode = authMode === loginView;
@@ -77,6 +78,10 @@ export function WelcomePage() {
   useEffect(() => {
     setAuthMode(modeFromQuery);
   }, [modeFromQuery]);
+
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [authMode]);
 
   useEffect(() => {
     if (searchParams.get("oauthError") !== "1") {
@@ -103,6 +108,13 @@ export function WelcomePage() {
   const showValidationMessage = (message: string) => {
     setValidationMessage(message);
     setValidationBounce((count) => count + 1);
+  };
+
+  const scrollToHowItWorks = () => {
+    const section = document.getElementById("how-it-works");
+    if (section) {
+      section.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
   };
 
   const submitSignUp = async (event: FormEvent<HTMLFormElement>) => {
@@ -189,41 +201,83 @@ export function WelcomePage() {
   return (
     <main className="relative flex min-h-screen flex-col overflow-x-hidden bg-background-dark text-white">
       <header className="welcome-glass-card fixed inset-x-0 top-0 z-50 border-b border-primary/10">
-        <div className="mx-auto flex h-20 w-full max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded bg-primary text-background-dark">
-              <span className="material-icons text-xl">offline_bolt</span>
+        <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="flex h-20 items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded bg-primary text-background-dark">
+                <span className="material-icons text-xl">offline_bolt</span>
+              </div>
+              <span className="text-xl font-bold tracking-tight text-white">IncentApply</span>
             </div>
-            <span className="text-xl font-bold tracking-tight text-white">IncentApply</span>
+            <div className="hidden items-center space-x-8 md:flex">
+              <button
+                type="button"
+                onClick={scrollToHowItWorks}
+                className="text-sm font-medium text-gray-300 transition-colors hover:text-primary"
+              >
+                How it works
+              </button>
+              <button
+                type="button"
+                onClick={() => setNotice("Pricing details are coming soon.")}
+                className="text-sm font-medium text-gray-300 transition-colors hover:text-primary"
+              >
+                Pricing
+              </button>
+              <div className="h-4 w-px bg-gray-700" />
+              <button
+                type="button"
+                onClick={() => toggleMode(isLoginMode ? signUpView : loginView)}
+                className="text-sm font-medium text-white transition-colors hover:text-primary"
+              >
+                {isLoginMode ? "Sign up" : "Log in"}
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen((open) => !open)}
+              className="p-2 text-gray-300 transition-colors hover:text-white focus:outline-none md:hidden"
+              aria-label="Toggle mobile menu"
+              aria-expanded={mobileMenuOpen}
+              aria-controls="welcome-mobile-menu"
+            >
+              <span className="material-icons-outlined">menu</span>
+            </button>
           </div>
-          <div className="hidden items-center space-x-8 md:flex">
-            <button
-              type="button"
-              className="text-sm font-medium text-gray-300 transition-colors hover:text-primary"
-            >
-              How it works
-            </button>
-            <button
-              type="button"
-              className="text-sm font-medium text-gray-300 transition-colors hover:text-primary"
-            >
-              Pricing
-            </button>
-            <div className="h-4 w-px bg-gray-700" />
-            <button
-              type="button"
-              onClick={() => toggleMode(isLoginMode ? signUpView : loginView)}
-              className="text-sm font-medium text-white transition-colors hover:text-primary"
-            >
-              {isLoginMode ? "Sign up" : "Log in"}
-            </button>
-          </div>
-          <button
-            type="button"
-            className="p-2 text-gray-300 transition-colors hover:text-white focus:outline-none md:hidden"
-          >
-            <span className="material-icons-outlined">menu</span>
-          </button>
+          {mobileMenuOpen ? (
+            <div id="welcome-mobile-menu" className="space-y-1 border-t border-primary/10 pb-3 pt-2 md:hidden">
+              <button
+                type="button"
+                onClick={() => {
+                  scrollToHowItWorks();
+                  setMobileMenuOpen(false);
+                }}
+                className="block w-full rounded-lg px-2 py-2 text-left text-sm font-medium text-gray-300 transition-colors hover:bg-white/5 hover:text-primary"
+              >
+                How it works
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setNotice("Pricing details are coming soon.");
+                  setMobileMenuOpen(false);
+                }}
+                className="block w-full rounded-lg px-2 py-2 text-left text-sm font-medium text-gray-300 transition-colors hover:bg-white/5 hover:text-primary"
+              >
+                Pricing
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  toggleMode(isLoginMode ? signUpView : loginView);
+                  setMobileMenuOpen(false);
+                }}
+                className="block w-full rounded-lg px-2 py-2 text-left text-sm font-medium text-white transition-colors hover:bg-white/5 hover:text-primary"
+              >
+                {isLoginMode ? "Sign up" : "Log in"}
+              </button>
+            </div>
+          ) : null}
         </div>
       </header>
 
@@ -640,7 +694,7 @@ export function WelcomePage() {
         </div>
       </section>
 
-      <section className="border-t border-white/5 bg-surface-dark/50">
+      <section id="how-it-works" className="border-t border-white/5 bg-surface-dark/50">
         <div className="mx-auto flex w-full max-w-7xl min-h-[calc(100dvh-5rem)] flex-col px-4 py-12 sm:px-6 lg:px-8 lg:py-16">
           <div className="flex-1">
             <div className="mb-12 text-center">

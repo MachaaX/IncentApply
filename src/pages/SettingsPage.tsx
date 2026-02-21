@@ -101,7 +101,7 @@ function initialsFromNames(firstName: string, lastName: string): string {
 export function SettingsPage() {
   const navigate = useNavigate();
   const { section: routeSection } = useParams<{ section?: string }>();
-  const { user, updateProfile } = useAuth();
+  const { user, updateProfile, signOut } = useAuth();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const section = isSettingsSection(routeSection ?? "") ? routeSection : "profile";
@@ -445,6 +445,19 @@ export function SettingsPage() {
                 ) : null}
               </div>
             ) : null}
+
+            <div className="mt-8 border-t border-primary/10 pt-5 lg:hidden">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Account
+              </p>
+              <button
+                type="button"
+                onClick={() => void signOut()}
+                className="mt-3 w-full rounded-lg border border-red-500/35 bg-red-500/10 px-4 py-2.5 text-sm font-semibold text-red-300 transition-colors hover:bg-red-500/20"
+              >
+                Log Out
+              </button>
+            </div>
           </div>
         </div>
       </div>

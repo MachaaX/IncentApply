@@ -968,7 +968,7 @@ function localRegisterWithGoogle(email?: string): AuthSession {
 
   const existing = getState().users.find((user) => user.email.toLowerCase() === normalizedEmail);
   if (existing) {
-    throw new Error("An account already exists with this email. Please log in instead.");
+    return createLocalSession(existing.id, "google", `google-${Date.now()}`);
   }
 
   const created = ensureLocalUser({ email: normalizedEmail });

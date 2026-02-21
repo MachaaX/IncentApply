@@ -49,7 +49,7 @@ export function LoginPage() {
       <div className="mx-auto grid min-h-screen w-full max-w-md grid-rows-[1fr_auto_1fr]">
         <div className="flex items-center justify-center py-6">
           <Link
-            to="/welcome"
+            to="/"
             className="inline-flex items-center justify-center gap-3 rounded-lg transition-opacity hover:opacity-90"
           >
             <div className="flex h-9 w-9 items-center justify-center rounded bg-primary text-background-dark">
