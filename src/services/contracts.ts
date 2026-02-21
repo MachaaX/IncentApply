@@ -1,5 +1,6 @@
 import type {
   ApplicationLog,
+  AppNotification,
   CounterApplicationLog,
   AuthProvider,
   AuthSession,
@@ -117,6 +118,14 @@ export interface WalletService {
   withdraw(input: { amountCents: number; bankAccountId: string }): Promise<Wallet>;
 }
 
+export interface NotificationService {
+  getNotifications(limit?: number): Promise<{ notifications: AppNotification[]; unreadCount: number }>;
+  dismissNotification(notificationId: string): Promise<void>;
+  markNotificationRead(notificationId: string): Promise<void>;
+  markAllNotificationsRead(): Promise<void>;
+  subscribe(onNotification: () => void): () => void;
+}
+
 export interface SettlementService {
   getLogs(): Promise<SettlementLog[]>;
   getCurrentCycle(): Promise<SettlementCycle>;
@@ -133,6 +142,7 @@ export interface ServiceContainer {
   groupService: GroupService;
   applicationService: ApplicationService;
   walletService: WalletService;
+  notificationService: NotificationService;
   settlementService: SettlementService;
   configService: ConfigService;
 }

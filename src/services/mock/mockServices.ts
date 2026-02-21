@@ -1,4 +1,5 @@
 import type {
+  AppNotification,
   ActivityItem,
   ApplicationLog,
   AuthSession,
@@ -24,6 +25,7 @@ import type {
   AuthService,
   ConfigService,
   GroupService,
+  NotificationService,
   ServiceContainer,
   SettlementService,
   WalletService
@@ -214,6 +216,28 @@ interface BackendSettlementLogsResponse {
   logs: BackendSettlementLog[];
 }
 
+interface BackendNotification {
+  id: string;
+  userId: string;
+  groupId?: string | null;
+  type: "welcome" | "group_invite" | "goal_reminder";
+  title: string;
+  message: string;
+  payload: Record<string, unknown> | null;
+  createdAt: string;
+  readAt: string | null;
+  isRead: boolean;
+}
+
+interface BackendNotificationsResponse {
+  notifications: BackendNotification[];
+  unreadCount: number;
+}
+
+interface BackendNotificationUpdateResponse {
+  ok: boolean;
+}
+
 class BackendUnavailableError extends Error {}
 
 const configuredStrategy = (import.meta.env.VITE_AUTH_STRATEGY as string | undefined)?.toLowerCase();
@@ -259,6 +283,42 @@ const localGroupSettingsOverride = new Map<
 >();
 
 const localManualCycleCounts = new Map<string, number>();
+const localNotificationsByUserId = new Map<string, AppNotification[]>();
+const localNotificationSubscribers = new Set<() => void>();
+
+function getLocalNotificationsForUser(userId: string): AppNotification[] {
+  const existing = localNotificationsByUserId.get(userId);
+  if (existing) {
+    return existing;
+  }
+
+  const seeded: AppNotification[] = [
+    {
+      id: `local-welcome-${userId}`,
+      userId,
+      groupId: null,
+      type: "welcome",
+      title: "Welcome to IncentApply",
+      message: "You are all set. Start by creating or joining a group.",
+      payload: { kind: "welcome" },
+      createdAt: new Date().toISOString(),
+      readAt: null,
+      isRead: false
+    }
+  ];
+  localNotificationsByUserId.set(userId, seeded);
+  return seeded;
+}
+
+function emitLocalNotificationUpdate() {
+  for (const handler of [...localNotificationSubscribers]) {
+    try {
+      handler();
+    } catch {
+      // ignore subscriber failures
+    }
+  }
+}
 
 function buildBackendUrl(path: string): string {
   return backendAuthBaseUrl ? `${backendAuthBaseUrl}${path}` : path;
@@ -416,6 +476,27 @@ function mapBackendSettlementLog(entry: BackendSettlementLog): SettlementLog {
           amountWonCents: Math.max(0, Number(participant.amountWonCents ?? 0))
         }))
       : []
+  };
+}
+
+function mapBackendNotification(entry: BackendNotification): AppNotification {
+  return {
+    id: String(entry.id ?? ""),
+    userId: String(entry.userId ?? ""),
+    groupId: entry.groupId ?? null,
+    type:
+      entry.type === "welcome" || entry.type === "group_invite" || entry.type === "goal_reminder"
+        ? entry.type
+        : "goal_reminder",
+    title: String(entry.title ?? ""),
+    message: String(entry.message ?? ""),
+    payload:
+      entry.payload && typeof entry.payload === "object"
+        ? (entry.payload as Record<string, unknown>)
+        : null,
+    createdAt: String(entry.createdAt ?? new Date().toISOString()),
+    readAt: entry.readAt ?? null,
+    isRead: Boolean(entry.isRead)
   };
 }
 
@@ -2418,6 +2499,208 @@ const walletService: WalletService = {
   }
 };
 
+const notificationService: NotificationService = {
+  async getNotifications(limit) {
+    const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+    const user = getCurrentUserRecord();
+
+    if (!backendAuthEnabled()) {
+      const all = [...getLocalNotificationsForUser(user.id)].sort(
+        (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+      );
+      const notifications = all.slice(0, safeLimit);
+      const unreadCount = all.filter((entry) => !entry.isRead).length;
+      return withLatency({ notifications, unreadCount });
+    }
+
+    try {
+      const payload = await backendRequest<BackendNotificationsResponse>(
+        `/api/notifications?limit=${safeLimit}`,
+        {
+          method: "GET"
+        }
+      );
+      return withLatency({
+        notifications: payload.notifications.map((entry) => mapBackendNotification(entry)),
+        unreadCount: Math.max(0, Number(payload.unreadCount ?? 0))
+      });
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        const all = [...getLocalNotificationsForUser(user.id)].sort(
+          (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+        );
+        const notifications = all.slice(0, safeLimit);
+        const unreadCount = all.filter((entry) => !entry.isRead).length;
+        return withLatency({ notifications, unreadCount });
+      }
+      throw error;
+    }
+  },
+
+  async dismissNotification(notificationId) {
+    const user = getCurrentUserRecord();
+
+    if (!backendAuthEnabled()) {
+      const current = getLocalNotificationsForUser(user.id);
+      localNotificationsByUserId.set(
+        user.id,
+        current.filter((entry) => entry.id !== notificationId)
+      );
+      emitLocalNotificationUpdate();
+      return withLatency(undefined);
+    }
+
+    try {
+      await backendRequest<BackendNotificationUpdateResponse>(
+        `/api/notifications/${encodeURIComponent(notificationId)}`,
+        {
+          method: "DELETE"
+        }
+      );
+      return withLatency(undefined);
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        const current = getLocalNotificationsForUser(user.id);
+        localNotificationsByUserId.set(
+          user.id,
+          current.filter((entry) => entry.id !== notificationId)
+        );
+        emitLocalNotificationUpdate();
+        return withLatency(undefined);
+      }
+      throw error;
+    }
+  },
+
+  async markNotificationRead(notificationId) {
+    const user = getCurrentUserRecord();
+
+    if (!backendAuthEnabled()) {
+      const current = getLocalNotificationsForUser(user.id);
+      const nowIso = new Date().toISOString();
+      localNotificationsByUserId.set(
+        user.id,
+        current.map((entry) =>
+          entry.id === notificationId && !entry.isRead
+            ? { ...entry, readAt: nowIso, isRead: true }
+            : entry
+        )
+      );
+      emitLocalNotificationUpdate();
+      return withLatency(undefined);
+    }
+
+    try {
+      await backendRequest<BackendNotificationUpdateResponse>(
+        `/api/notifications/${encodeURIComponent(notificationId)}/read`,
+        {
+          method: "PATCH"
+        }
+      );
+      return withLatency(undefined);
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        const current = getLocalNotificationsForUser(user.id);
+        const nowIso = new Date().toISOString();
+        localNotificationsByUserId.set(
+          user.id,
+          current.map((entry) =>
+            entry.id === notificationId && !entry.isRead
+              ? { ...entry, readAt: nowIso, isRead: true }
+              : entry
+          )
+        );
+        emitLocalNotificationUpdate();
+        return withLatency(undefined);
+      }
+      throw error;
+    }
+  },
+
+  async markAllNotificationsRead() {
+    const user = getCurrentUserRecord();
+
+    if (!backendAuthEnabled()) {
+      const current = getLocalNotificationsForUser(user.id);
+      const nowIso = new Date().toISOString();
+      localNotificationsByUserId.set(
+        user.id,
+        current.map((entry) =>
+          entry.isRead ? entry : { ...entry, readAt: nowIso, isRead: true }
+        )
+      );
+      emitLocalNotificationUpdate();
+      return withLatency(undefined);
+    }
+
+    try {
+      await backendRequest<BackendNotificationUpdateResponse>("/api/notifications/read-all", {
+        method: "PATCH"
+      });
+      return withLatency(undefined);
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        const current = getLocalNotificationsForUser(user.id);
+        const nowIso = new Date().toISOString();
+        localNotificationsByUserId.set(
+          user.id,
+          current.map((entry) =>
+            entry.isRead ? entry : { ...entry, readAt: nowIso, isRead: true }
+          )
+        );
+        emitLocalNotificationUpdate();
+        return withLatency(undefined);
+      }
+      throw error;
+    }
+  },
+
+  subscribe(onNotification) {
+    if (!backendAuthEnabled()) {
+      localNotificationSubscribers.add(onNotification);
+      return () => {
+        localNotificationSubscribers.delete(onNotification);
+      };
+    }
+
+    if (typeof window === "undefined" || typeof window.EventSource === "undefined") {
+      return () => {};
+    }
+
+    const token = getStoredBackendToken();
+    if (!token) {
+      return () => {};
+    }
+
+    const streamUrl = buildBackendUrl(
+      `/api/notifications/stream?token=${encodeURIComponent(token)}`
+    );
+
+    let source: EventSource;
+    try {
+      source = new EventSource(streamUrl);
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        localNotificationSubscribers.add(onNotification);
+        return () => {
+          localNotificationSubscribers.delete(onNotification);
+        };
+      }
+      return () => {};
+    }
+
+    const handleNotification = () => {
+      onNotification();
+    };
+    source.addEventListener("notification", handleNotification as EventListener);
+
+    return () => {
+      source.removeEventListener("notification", handleNotification as EventListener);
+      source.close();
+    };
+  }
+};
+
 function buildLocalSettlementLogsForUser(userId: string): SettlementLog[] {
   const state = getState();
   const summary = localGroupToSummary(state.group);
@@ -2664,6 +2947,7 @@ export const services: ServiceContainer = {
   groupService,
   applicationService,
   walletService,
+  notificationService,
   settlementService,
   configService
 };

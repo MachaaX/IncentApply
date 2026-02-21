@@ -177,6 +177,21 @@ export interface CounterApplicationLog {
   loggedAt: string;
 }
 
+export type NotificationType = "welcome" | "group_invite" | "goal_reminder";
+
+export interface AppNotification {
+  id: string;
+  userId: string;
+  groupId?: string | null;
+  type: NotificationType;
+  title: string;
+  message: string;
+  payload: Record<string, unknown> | null;
+  createdAt: string;
+  readAt: string | null;
+  isRead: boolean;
+}
+
 export interface SettlementParticipantSnapshot {
   userId: string;
   name: string;

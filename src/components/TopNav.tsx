@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../app/AuthContext";
-import { useMyGroupsList, usePendingInvites } from "../hooks/useAppQueries";
+import {
+  useDismissNotification,
+  useMyGroupsList,
+  useNotifications,
+  usePendingInvites
+} from "../hooks/useAppQueries";
+import { useServices } from "../hooks/useServices";
 import { getLastOpenedGroupId, setLastOpenedGroupId } from "../utils/groupNavigation";
 
 const routeTitle: Record<string, string> = {
@@ -12,12 +19,6 @@ const routeTitle: Record<string, string> = {
   "/settlements": "Settlements"
 };
 
-const initialNotifications = [
-  { id: "notif-1", message: "Welcome to IncentApply - 02/26" },
-  { id: "notif-2", message: "You are behind the goal this week" },
-  { id: "notif-3", message: "You have a group invite in My Groups" }
-];
-
 function getUserInitials(firstName?: string, lastName?: string): string {
   const first = firstName?.trim().charAt(0) ?? "";
   const last = lastName?.trim().charAt(0) ?? "";
@@ -25,14 +26,34 @@ function getUserInitials(firstName?: string, lastName?: string): string {
   return initials || "U";
 }
 
+function formatNotificationTimestamp(value: string, timeZone?: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      dateStyle: "short",
+      timeStyle: "short",
+      timeZone
+    }).format(parsed);
+  } catch {
+    return parsed.toLocaleString();
+  }
+}
+
 export function TopNav() {
+  const queryClient = useQueryClient();
+  const { notificationService } = useServices();
   const { user } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const myGroupsQuery = useMyGroupsList();
   const pendingInvitesQuery = usePendingInvites();
+  const notificationsQuery = useNotifications();
+  const dismissNotificationMutation = useDismissNotification();
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [notifications, setNotifications] = useState(initialNotifications);
   const [groupMenuOpen, setGroupMenuOpen] = useState(false);
   const groupMenuRef = useRef<HTMLDivElement | null>(null);
   const isMyGroupsRoute = location.pathname.startsWith("/my-groups");
@@ -63,13 +84,18 @@ export function TopNav() {
     (groupLinks.some((group) => group.id === storedGroupId) ? storedGroupId : undefined) ??
     groupLinks[0]?.id;
   const highlightedGroupId = routeGroupId ?? activeGroupId;
+  const notifications = notificationsQuery.data?.notifications ?? [];
+  const unreadCount = notifications.reduce(
+    (total, entry) => total + (entry.isRead ? 0 : 1),
+    0
+  );
 
   const startFreshCreateGroup = () => {
     window.dispatchEvent(new Event("incentapply:create-group-fresh-start"));
     navigate("/my-groups/create");
   };
   const dismissNotification = (notificationId: string) => {
-    setNotifications((items) => items.filter((item) => item.id !== notificationId));
+    void dismissNotificationMutation.mutateAsync(notificationId);
   };
 
   useEffect(() => {
@@ -103,6 +129,13 @@ export function TopNav() {
     }
     void myGroupsQuery.refetch();
   }, [groupMenuOpen, myGroupsQuery]);
+
+  useEffect(() => {
+    const unsubscribe = notificationService.subscribe(() => {
+      void queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    });
+    return unsubscribe;
+  }, [notificationService, queryClient]);
 
   const groupsButtonClass = `inline-flex h-10 shrink-0 items-center gap-2 rounded-lg border px-3 text-sm font-bold transition-all ${
     groupMenuOpen
@@ -215,7 +248,7 @@ export function TopNav() {
             aria-expanded={notificationsOpen}
           >
             <span className="material-icons text-[26px]">notifications</span>
-            {notifications.length ? (
+            {unreadCount > 0 ? (
               <span className="absolute right-0 top-0 h-2.5 w-2.5 rounded-full bg-secondary-gold" />
             ) : null}
           </button>
@@ -246,42 +279,73 @@ export function TopNav() {
             onClick={() => setNotificationsOpen(false)}
             className="fixed inset-0 z-20 bg-black/25"
           />
-          <aside className="fixed right-4 top-24 z-30 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-primary/20 bg-surface-dark p-4 shadow-2xl">
+          <aside className="fixed right-4 top-24 z-30 flex max-h-[calc(100dvh-7rem)] w-[min(22rem,calc(100vw-2rem))] flex-col rounded-2xl border border-primary/20 bg-surface-dark p-4 shadow-2xl">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-bold uppercase tracking-wide text-white">Notifications</h2>
-              <button
-                type="button"
-                onClick={() => setNotificationsOpen(false)}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-primary/20 text-slate-300 hover:text-white"
-                aria-label="Close notifications"
-              >
-                <span className="material-icons text-base">close</span>
-              </button>
+              <h2 className="text-sm font-bold uppercase tracking-wide text-white">
+                Notifications
+              </h2>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setNotificationsOpen(false)}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-primary/20 text-slate-300 hover:text-white"
+                  aria-label="Close notifications"
+                >
+                  <span className="material-icons text-base">close</span>
+                </button>
+              </div>
             </div>
-            {notifications.length ? (
-              <ul className="space-y-2">
-                {notifications.map((item) => (
-                  <li
-                    key={item.id}
-                    className="flex items-start justify-between gap-2 rounded-lg border border-primary/10 bg-background-dark px-3 py-2"
-                  >
-                    <p className="text-sm text-slate-100">{item.message}</p>
-                    <button
-                      type="button"
-                      onClick={() => dismissNotification(item.id)}
-                      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-primary/20 text-slate-300 transition-colors hover:text-white"
-                      aria-label={`Dismiss notification: ${item.message}`}
+            <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+              {notificationsQuery.isLoading ? (
+                <p className="rounded-lg border border-primary/10 bg-background-dark px-3 py-3 text-sm text-slate-400">
+                  Loading notifications...
+                </p>
+              ) : notificationsQuery.error ? (
+                <p className="rounded-lg border border-primary/10 bg-background-dark px-3 py-3 text-sm text-secondary-gold">
+                  {notificationsQuery.error instanceof Error
+                    ? notificationsQuery.error.message
+                    : "Unable to load notifications."}
+                </p>
+              ) : notifications.length ? (
+                <ul className="space-y-2">
+                  {notifications.map((item) => (
+                    <li
+                      key={item.id}
+                      className={`flex items-start justify-between gap-2 rounded-lg border px-3 py-2 ${
+                        item.isRead
+                          ? "border-primary/10 bg-background-dark/60"
+                          : "border-primary/20 bg-background-dark"
+                      }`}
                     >
-                      <span className="material-icons text-base">close</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="rounded-lg border border-primary/10 bg-background-dark px-3 py-3 text-sm text-slate-400">
-                No notifications.
-              </p>
-            )}
+                      <div className="min-w-0">
+                        <p className={`text-xs font-semibold uppercase tracking-wide ${item.isRead ? "text-slate-400" : "text-primary"}`}>
+                          {item.title}
+                        </p>
+                        <p className={`mt-1 text-sm ${item.isRead ? "text-slate-400" : "text-slate-100"}`}>
+                          {item.message}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {formatNotificationTimestamp(item.createdAt, user?.timezone)}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => dismissNotification(item.id)}
+                        className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-primary/20 text-slate-300 transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        aria-label={`Dismiss notification: ${item.title}`}
+                        disabled={dismissNotificationMutation.isPending}
+                      >
+                        <span className="material-icons text-base">close</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="rounded-lg border border-primary/10 bg-background-dark px-3 py-3 text-sm text-slate-400">
+                  No notifications.
+                </p>
+              )}
+            </div>
           </aside>
         </>
       ) : null}

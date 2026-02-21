@@ -78,8 +78,13 @@ const GOAL_START_DAY_TO_INDEX = {
 };
 const APP_TIME_ZONE = "America/New_York";
 const UTC_ISO_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+const GOAL_REMINDER_JOB_INTERVAL_MS = 5 * 60 * 1000;
+const NOTIFICATION_DEFAULT_LIMIT = 100;
 let memberCycleCountsStoreMode = "database";
 const volatileMemberCycleCounts = new Map();
+const notificationSseClientsByUserId = new Map();
+let goalReminderJobInterval = null;
+let goalReminderJobRunning = false;
 const entraConfiguredExplicitly = Boolean(
   ENTRA_CLIENT_ID || ENTRA_CLIENT_SECRET || ENTRA_REDIRECT_URI || ENTRA_DISCOVERY_URL
 );
@@ -559,6 +564,39 @@ async function initDb() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS app_notifications (
+        id VARCHAR(191) PRIMARY KEY,
+        user_id VARCHAR(191) NOT NULL,
+        group_id VARCHAR(191) NULL,
+        notification_type VARCHAR(64) NOT NULL,
+        title VARCHAR(191) NOT NULL,
+        message TEXT NOT NULL,
+        payload_json LONGTEXT NULL,
+        dedupe_key VARCHAR(255) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        read_at TIMESTAMP NULL DEFAULT NULL,
+        CONSTRAINT fk_app_notifications_user
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        CONSTRAINT fk_app_notifications_group
+          FOREIGN KEY (group_id) REFERENCES app_groups(id) ON DELETE SET NULL,
+        UNIQUE KEY app_notifications_user_dedupe_uidx (user_id, dedupe_key),
+        KEY app_notifications_user_created_idx (user_id, created_at),
+        KEY app_notifications_user_read_idx (user_id, read_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS app_notification_dismissals (
+        user_id VARCHAR(191) NOT NULL,
+        dedupe_key VARCHAR(255) NOT NULL,
+        dismissed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, dedupe_key),
+        CONSTRAINT fk_app_notification_dismissals_user
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
     const goalCycleColumn = await pool.query(`
       SELECT COUNT(*) AS count
       FROM information_schema.columns
@@ -749,6 +787,30 @@ async function initDb() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_notifications (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      group_id TEXT REFERENCES app_groups(id) ON DELETE SET NULL,
+      notification_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      payload_json TEXT,
+      dedupe_key TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      read_at TIMESTAMPTZ
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_notification_dismissals (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      dedupe_key TEXT NOT NULL,
+      dismissed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (user_id, dedupe_key)
+    );
+  `);
+
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS group_members_user_idx
     ON group_members(user_id);
   `);
@@ -776,6 +838,21 @@ async function initDb() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS member_settlement_logs_group_cycle_idx
     ON member_settlement_logs(group_id_snapshot, cycle_key_snapshot);
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS app_notifications_user_dedupe_uidx
+    ON app_notifications(user_id, dedupe_key);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS app_notifications_user_created_idx
+    ON app_notifications(user_id, created_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS app_notifications_user_read_idx
+    ON app_notifications(user_id, read_at);
   `);
 
   if (memberCycleCountsStoreMode === "database") {
@@ -1244,6 +1321,109 @@ function toSettlementLog(row) {
     metGoal: Boolean(row.met_goal_snapshot),
     participants: parseSettlementParticipantsSnapshot(row.participants_snapshot_json)
   };
+}
+
+function parseNotificationPayload(value) {
+  if (!value) {
+    return null;
+  }
+  if (typeof value === "object") {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function toAppNotification(row) {
+  const readAt = row.read_at ? asIsoTimestamp(row.read_at) : null;
+  const createdAt = asIsoTimestamp(row.created_at);
+  return {
+    id: String(row.id ?? ""),
+    userId: String(row.user_id ?? ""),
+    groupId: row.group_id ? String(row.group_id) : null,
+    type: String(row.notification_type ?? ""),
+    title: String(row.title ?? ""),
+    message: String(row.message ?? ""),
+    payload: parseNotificationPayload(row.payload_json),
+    createdAt,
+    readAt,
+    isRead: Boolean(readAt)
+  };
+}
+
+function safeJsonStringify(value) {
+  return JSON.stringify(value).replace(/</g, "\\u003c");
+}
+
+function writeSseEvent(res, event, payload) {
+  try {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${safeJsonStringify(payload)}\n\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function addNotificationSseClient(userId, res) {
+  const userKey = String(userId ?? "").trim();
+  if (!userKey) {
+    return () => {};
+  }
+
+  const existing = notificationSseClientsByUserId.get(userKey);
+  if (existing) {
+    existing.add(res);
+  } else {
+    notificationSseClientsByUserId.set(userKey, new Set([res]));
+  }
+
+  return () => {
+    const clients = notificationSseClientsByUserId.get(userKey);
+    if (!clients) {
+      return;
+    }
+    clients.delete(res);
+    if (clients.size === 0) {
+      notificationSseClientsByUserId.delete(userKey);
+    }
+  };
+}
+
+function emitNotificationCreated(notification) {
+  const userId = String(notification?.userId ?? "").trim();
+  if (!userId) {
+    return;
+  }
+
+  const clients = notificationSseClientsByUserId.get(userId);
+  if (!clients?.size) {
+    return;
+  }
+
+  for (const client of [...clients]) {
+    const written = writeSseEvent(client, "notification", notification);
+    if (!written) {
+      clients.delete(client);
+    }
+  }
+
+  if (clients.size === 0) {
+    notificationSseClientsByUserId.delete(userId);
+  }
 }
 
 function settlementHasMultipleUniqueParticipants(log) {
@@ -2119,6 +2299,482 @@ async function listSettlementLogsForUser(userId, limit = 500) {
     .filter((entry) => settlementHasMultipleUniqueParticipants(entry));
 }
 
+async function getNotificationById(notificationId) {
+  const result = await pool.query(
+    `
+      SELECT
+        id,
+        user_id,
+        group_id,
+        notification_type,
+        title,
+        message,
+        payload_json,
+        dedupe_key,
+        created_at,
+        read_at
+      FROM app_notifications
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [notificationId]
+  );
+
+  const row = result.rows[0] ?? null;
+  return row ? toAppNotification(row) : null;
+}
+
+async function isNotificationDedupeDismissed(userId, dedupeKey) {
+  const normalizedDedupeKey = String(dedupeKey ?? "").trim();
+  if (!userId || !normalizedDedupeKey) {
+    return false;
+  }
+
+  const result = await pool.query(
+    `
+      SELECT 1
+      FROM app_notification_dismissals
+      WHERE user_id = $1
+        AND dedupe_key = $2
+      LIMIT 1
+    `,
+    [userId, normalizedDedupeKey]
+  );
+
+  return result.rows.length > 0;
+}
+
+async function recordNotificationDismissal(userId, dedupeKey) {
+  const normalizedDedupeKey = String(dedupeKey ?? "").trim();
+  if (!userId || !normalizedDedupeKey) {
+    return;
+  }
+
+  try {
+    await pool.query(
+      `
+        INSERT INTO app_notification_dismissals (
+          user_id,
+          dedupe_key,
+          dismissed_at
+        )
+        VALUES ($1, $2, NOW())
+      `,
+      [userId, normalizedDedupeKey]
+    );
+  } catch (error) {
+    if (!isDuplicateInsertError(error)) {
+      throw error;
+    }
+  }
+}
+
+async function createNotification({
+  userId,
+  groupId = null,
+  type,
+  title,
+  message,
+  payload = null,
+  dedupeKey = null
+}) {
+  if (!userId || !type || !title || !message) {
+    return null;
+  }
+
+  const notificationId = randomUUID();
+  const payloadJson = payload ? JSON.stringify(payload) : null;
+  const normalizedDedupeKey = dedupeKey ? String(dedupeKey).trim() : null;
+  if (normalizedDedupeKey) {
+    const dismissed = await isNotificationDedupeDismissed(userId, normalizedDedupeKey);
+    if (dismissed) {
+      return null;
+    }
+  }
+
+  try {
+    await pool.query(
+      `
+        INSERT INTO app_notifications (
+          id,
+          user_id,
+          group_id,
+          notification_type,
+          title,
+          message,
+          payload_json,
+          dedupe_key
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `,
+      [
+        notificationId,
+        userId,
+        groupId,
+        type,
+        title,
+        message,
+        payloadJson,
+        normalizedDedupeKey
+      ]
+    );
+  } catch (error) {
+    if (normalizedDedupeKey && isDuplicateInsertError(error)) {
+      return null;
+    }
+    throw error;
+  }
+
+  const created = await getNotificationById(notificationId);
+  if (created) {
+    emitNotificationCreated(created);
+  }
+  return created;
+}
+
+async function createWelcomeNotificationForUser(userId) {
+  try {
+    await createNotification({
+      userId,
+      type: "welcome",
+      title: "Welcome to IncentApply",
+      message: "You are all set. Create or join a group and start tracking applications.",
+      payload: { kind: "welcome" },
+      dedupeKey: "welcome:first-join"
+    });
+  } catch (error) {
+    console.warn(
+      `Unable to create welcome notification for user ${userId}. ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+}
+
+async function createGroupInviteNotification({
+  recipientUserId,
+  groupId,
+  groupName,
+  invitedByUserId,
+  invitedByDisplayName
+}) {
+  try {
+    await createNotification({
+      userId: recipientUserId,
+      groupId,
+      type: "group_invite",
+      title: "New Group Invite",
+      message: `${invitedByDisplayName} invited you to join "${groupName}".`,
+      payload: {
+        groupId,
+        groupName,
+        invitedByUserId,
+        invitedByDisplayName
+      },
+      dedupeKey: `group-invite:${groupId}:${recipientUserId}`
+    });
+  } catch (error) {
+    console.warn(
+      `Unable to create group invite notification for user ${recipientUserId}. ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+}
+
+function createGoalReminderMessage(groupName, goalCycle, applicationGoal) {
+  const goalText = Math.max(0, Number(applicationGoal ?? 0));
+  const cycleLabel = goalCycle === "daily" ? "daily" : goalCycle === "biweekly" ? "biweekly" : "weekly";
+  return `Reminder for ${groupName}: your ${cycleLabel} goal is ${goalText} applications.`;
+}
+
+async function ensureGoalReminderNotificationsForUser(userId, referenceDate = new Date()) {
+  if (!userId) {
+    return 0;
+  }
+
+  const groupsResult = await pool.query(
+    `
+      SELECT g.*
+      FROM app_groups g
+      INNER JOIN group_members gm
+        ON gm.group_id = g.id
+      WHERE gm.user_id = $1
+      ORDER BY g.created_at DESC
+    `,
+    [userId]
+  );
+
+  if (!groupsResult.rows.length) {
+    return 0;
+  }
+
+  const now = new Date(referenceDate);
+  let createdCount = 0;
+  for (const group of groupsResult.rows) {
+    const cycle = getCycleWindowForGroup(group, now);
+    if (now.getTime() >= cycle.endsAt.getTime()) {
+      continue;
+    }
+
+    const groupName = String(group.name ?? "Group");
+    const applicationGoal = Math.max(0, Number(group.weekly_goal ?? 0));
+    if (cycle.goalCycle === "daily") {
+      const reminderAt = new Date(cycle.startsAt.getTime() + 12 * 60 * 60 * 1000);
+      if (now.getTime() < reminderAt.getTime() || reminderAt.getTime() >= cycle.endsAt.getTime()) {
+        continue;
+      }
+
+      const created = await createNotification({
+        userId,
+        groupId: group.id,
+        type: "goal_reminder",
+        title: "Daily Goal Reminder",
+        message: createGoalReminderMessage(groupName, cycle.goalCycle, applicationGoal),
+        payload: {
+          groupId: group.id,
+          groupName,
+          goalCycle: cycle.goalCycle,
+          cycleKey: cycle.cycleKey,
+          cycleStartsAt: cycle.startsAt.toISOString(),
+          cycleEndsAt: cycle.endsAt.toISOString(),
+          reminderAt: reminderAt.toISOString(),
+          applicationGoal
+        },
+        dedupeKey: `goal-reminder:${group.id}:${userId}:${cycle.cycleKey}:12h`
+      });
+      if (created) {
+        createdCount += 1;
+      }
+      continue;
+    }
+
+    if (cycle.goalCycle !== "weekly" && cycle.goalCycle !== "biweekly") {
+      continue;
+    }
+
+    const cycleStartLocalDay = toUtcCalendarDate(cycle.startsAt, APP_TIME_ZONE);
+    const cycleEndLocalDay = toUtcCalendarDate(cycle.endsAt, APP_TIME_ZONE);
+    const todayLocalDay = toUtcCalendarDate(now, APP_TIME_ZONE);
+    let cursor = new Date(cycleStartLocalDay);
+
+    while (
+      cursor.getTime() < cycleEndLocalDay.getTime() &&
+      cursor.getTime() <= todayLocalDay.getTime()
+    ) {
+      const reminderAt = zonedLocalToUtc(
+        cursor.getUTCFullYear(),
+        cursor.getUTCMonth() + 1,
+        cursor.getUTCDate(),
+        12,
+        0,
+        0,
+        APP_TIME_ZONE
+      );
+      if (now.getTime() >= reminderAt.getTime() && reminderAt.getTime() < cycle.endsAt.getTime()) {
+        const reminderDayKey = utcCalendarDateYmd(cursor);
+        const created = await createNotification({
+          userId,
+          groupId: group.id,
+          type: "goal_reminder",
+          title: "Goal Reminder",
+          message: createGoalReminderMessage(groupName, cycle.goalCycle, applicationGoal),
+          payload: {
+            groupId: group.id,
+            groupName,
+            goalCycle: cycle.goalCycle,
+            cycleKey: cycle.cycleKey,
+            cycleStartsAt: cycle.startsAt.toISOString(),
+            cycleEndsAt: cycle.endsAt.toISOString(),
+            reminderAt: reminderAt.toISOString(),
+            reminderDay: reminderDayKey,
+            applicationGoal
+          },
+          dedupeKey: `goal-reminder:${group.id}:${userId}:${cycle.cycleKey}:${reminderDayKey}:12h`
+        });
+        if (created) {
+          createdCount += 1;
+        }
+      }
+      cursor = addUtcCalendarDays(cursor, 1);
+    }
+  }
+
+  return createdCount;
+}
+
+async function ensureGoalReminderNotificationsForAllUsers(referenceDate = new Date()) {
+  const result = await pool.query(
+    `
+      SELECT DISTINCT user_id
+      FROM group_members
+    `
+  );
+
+  if (!result.rows.length) {
+    return 0;
+  }
+
+  let createdCount = 0;
+  for (const row of result.rows) {
+    const userId = String(row.user_id ?? "").trim();
+    if (!userId) {
+      continue;
+    }
+    createdCount += await ensureGoalReminderNotificationsForUser(userId, referenceDate);
+  }
+  return createdCount;
+}
+
+async function runGoalReminderJob() {
+  if (goalReminderJobRunning) {
+    return;
+  }
+  goalReminderJobRunning = true;
+  try {
+    await ensureGoalReminderNotificationsForAllUsers(new Date());
+  } catch (error) {
+    console.warn(
+      `Goal reminder job failed. ${error instanceof Error ? error.message : String(error)}`
+    );
+  } finally {
+    goalReminderJobRunning = false;
+  }
+}
+
+function startGoalReminderJob() {
+  if (goalReminderJobInterval) {
+    return;
+  }
+
+  void runGoalReminderJob();
+  goalReminderJobInterval = setInterval(() => {
+    void runGoalReminderJob();
+  }, GOAL_REMINDER_JOB_INTERVAL_MS);
+  goalReminderJobInterval.unref?.();
+}
+
+function normalizeNotificationLimit(limit) {
+  const parsed = Number(limit);
+  if (!Number.isFinite(parsed)) {
+    return NOTIFICATION_DEFAULT_LIMIT;
+  }
+  return Math.max(1, Math.min(500, Math.floor(parsed)));
+}
+
+async function listNotificationsForUser(userId, limit = NOTIFICATION_DEFAULT_LIMIT) {
+  const safeLimit = normalizeNotificationLimit(limit);
+  const result = await pool.query(
+    `
+      SELECT
+        id,
+        user_id,
+        group_id,
+        notification_type,
+        title,
+        message,
+        payload_json,
+        dedupe_key,
+        created_at,
+        read_at
+      FROM app_notifications
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+      LIMIT $2
+    `,
+    [userId, safeLimit]
+  );
+
+  return result.rows.map((row) => toAppNotification(row));
+}
+
+async function countUnreadNotificationsForUser(userId) {
+  const result = await pool.query(
+    `
+      SELECT COUNT(*) AS count
+      FROM app_notifications
+      WHERE user_id = $1
+        AND read_at IS NULL
+    `,
+    [userId]
+  );
+
+  return Math.max(0, Number(result.rows[0]?.count ?? 0));
+}
+
+async function markNotificationRead(userId, notificationId) {
+  const existing = await pool.query(
+    `
+      SELECT 1
+      FROM app_notifications
+      WHERE id = $1
+        AND user_id = $2
+      LIMIT 1
+    `,
+    [notificationId, userId]
+  );
+  if (!existing.rows.length) {
+    return false;
+  }
+
+  await pool.query(
+    `
+      UPDATE app_notifications
+      SET read_at = COALESCE(read_at, NOW())
+      WHERE id = $1
+        AND user_id = $2
+    `,
+    [notificationId, userId]
+  );
+
+  return true;
+}
+
+async function markAllNotificationsRead(userId) {
+  await pool.query(
+    `
+      UPDATE app_notifications
+      SET read_at = NOW()
+      WHERE user_id = $1
+        AND read_at IS NULL
+    `,
+    [userId]
+  );
+}
+
+async function dismissNotification(userId, notificationId) {
+  const existing = await pool.query(
+    `
+      SELECT dedupe_key
+      FROM app_notifications
+      WHERE id = $1
+        AND user_id = $2
+      LIMIT 1
+    `,
+    [notificationId, userId]
+  );
+  const notification = existing.rows[0] ?? null;
+  if (!notification) {
+    return false;
+  }
+
+  await pool.query(
+    `
+      DELETE FROM app_notifications
+      WHERE id = $1
+        AND user_id = $2
+    `,
+    [notificationId, userId]
+  );
+
+  const dedupeKey = String(notification.dedupe_key ?? "").trim();
+  if (dedupeKey) {
+    await recordNotificationDismissal(userId, dedupeKey);
+  }
+
+  return true;
+}
+
 async function createEmailUser({ email, password, firstName, lastName, timezone }) {
   const passwordHash = await hash(password, PASSWORD_HASH_OPTIONS);
   const id = randomUUID();
@@ -2852,6 +3508,7 @@ app.post("/api/auth/signup", async (req, res) => {
           timezone: normalizeUserTimeZone(timezone)
         });
 
+    await createWelcomeNotificationForUser(user.id);
     return res.status(201).json(buildAuthResponse(user));
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : "Signup failed." });
@@ -2875,6 +3532,7 @@ app.post("/api/auth/login", async (req, res) => {
       return res.status(401).json({ error: "Invalid credentials." });
     }
 
+    await createWelcomeNotificationForUser(user.id);
     return res.status(200).json(buildAuthResponse(user));
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : "Login failed." });
@@ -2938,6 +3596,7 @@ app.post("/api/auth/google/exchange", async (req, res) => {
       redirectUri,
       timezone: normalizeUserTimeZone(timezone)
     });
+    await createWelcomeNotificationForUser(user.id);
     return res.status(200).json(buildAuthResponse(user));
   } catch (error) {
     const statusCode = error instanceof HttpError ? error.statusCode : 500;
@@ -2955,6 +3614,7 @@ app.post("/api/auth/entra/exchange", async (req, res) => {
     }
 
     const user = await exchangeEntraCode(String(code));
+    await createWelcomeNotificationForUser(user.id);
     return res.status(200).json(buildAuthResponse(user));
   } catch (error) {
     return res
@@ -2985,6 +3645,7 @@ app.get("/api/auth/google/callback", async (req, res) => {
       redirectUri,
       timezone: oauthState.timezone
     });
+    await createWelcomeNotificationForUser(user.id);
     const auth = buildAuthResponse(user);
 
     // For SPA convenience in development this redirects with token.
@@ -3083,6 +3744,7 @@ app.get("/api/auth/entra/callback", async (req, res) => {
     }
 
     const user = await exchangeEntraCode(code);
+    await createWelcomeNotificationForUser(user.id);
     const auth = buildAuthResponse(user);
 
     const redirectUrl = new URL(oauthState.redirectPath, frontendBaseUrl);
@@ -3354,10 +4016,13 @@ app.post("/api/groups", authMiddleware, async (req, res) => {
 
     const recipients = normalizeInviteEmails(inviteEmails, user.email);
     const missingRecipients = [];
+    const recipientUsers = [];
     for (const recipientEmail of recipients) {
       const recipientUser = await getUserByEmail(recipientEmail);
       if (!recipientUser) {
         missingRecipients.push(recipientEmail);
+      } else {
+        recipientUsers.push(recipientUser);
       }
     }
 
@@ -3404,7 +4069,8 @@ app.post("/api/groups", authMiddleware, async (req, res) => {
 
     await ensureGroupMembership(groupId, user.id, "admin");
 
-    for (const recipientEmail of recipients) {
+    const invitedByDisplayName = memberDisplayName(user);
+    for (const recipientUser of recipientUsers) {
       await pool.query(
         `
           INSERT INTO group_invites (
@@ -3417,8 +4083,16 @@ app.post("/api/groups", authMiddleware, async (req, res) => {
           )
           VALUES ($1, $2, $3, $4, 'pending', $5)
         `,
-        [randomUUID(), groupId, recipientEmail, user.id, inviteExpiryValue]
+        [randomUUID(), groupId, normalizeEmail(recipientUser.email), user.id, inviteExpiryValue]
       );
+
+      await createGroupInviteNotification({
+        recipientUserId: recipientUser.id,
+        groupId,
+        groupName: normalizedName,
+        invitedByUserId: user.id,
+        invitedByDisplayName
+      });
     }
 
     const createdGroup = await getGroupByIdForMember(groupId, user.id);
@@ -4031,6 +4705,155 @@ app.get("/api/settlements/logs", authMiddleware, async (req, res) => {
   }
 });
 
+app.get("/api/notifications", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    if (!userId) {
+      return res.status(401).json({ error: "Missing user identity." });
+    }
+
+    const requestedLimit =
+      typeof req.query.limit === "string" ? Number(req.query.limit) : NOTIFICATION_DEFAULT_LIMIT;
+    const limit = normalizeNotificationLimit(requestedLimit);
+
+    await ensureGoalReminderNotificationsForUser(userId);
+    const notifications = await listNotificationsForUser(userId, limit);
+    const unreadCount = await countUnreadNotificationsForUser(userId);
+    return res.status(200).json({ notifications, unreadCount });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to fetch notifications."
+    });
+  }
+});
+
+app.patch("/api/notifications/:notificationId/read", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    if (!userId) {
+      return res.status(401).json({ error: "Missing user identity." });
+    }
+
+    const notificationId = String(req.params.notificationId ?? "").trim();
+    if (!notificationId) {
+      return res.status(400).json({ error: "Notification id is required." });
+    }
+
+    const marked = await markNotificationRead(userId, notificationId);
+    if (!marked) {
+      return res.status(404).json({ error: "Notification not found." });
+    }
+
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to update notification."
+    });
+  }
+});
+
+app.patch("/api/notifications/read-all", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    if (!userId) {
+      return res.status(401).json({ error: "Missing user identity." });
+    }
+
+    await markAllNotificationsRead(userId);
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to update notifications."
+    });
+  }
+});
+
+app.delete("/api/notifications/:notificationId", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    if (!userId) {
+      return res.status(401).json({ error: "Missing user identity." });
+    }
+
+    const notificationId = String(req.params.notificationId ?? "").trim();
+    if (!notificationId) {
+      return res.status(400).json({ error: "Notification id is required." });
+    }
+
+    const removed = await dismissNotification(userId, notificationId);
+    if (!removed) {
+      return res.status(404).json({ error: "Notification not found." });
+    }
+
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to dismiss notification."
+    });
+  }
+});
+
+app.get("/api/notifications/stream", async (req, res) => {
+  const authorizationHeader = String(req.headers.authorization ?? "");
+  const bearerToken = authorizationHeader.startsWith("Bearer ")
+    ? authorizationHeader.slice("Bearer ".length).trim()
+    : "";
+  const queryToken = typeof req.query.token === "string" ? req.query.token.trim() : "";
+  const token = bearerToken || queryToken;
+
+  if (!token) {
+    return res.status(401).json({ error: "Missing bearer token." });
+  }
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: "Invalid token." });
+  }
+
+  const userId = String(decoded?.sub ?? "").trim();
+  if (!userId) {
+    return res.status(401).json({ error: "Invalid token payload." });
+  }
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders?.();
+
+  const removeClient = addNotificationSseClient(userId, res);
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(": keepalive\n\n");
+    } catch {
+      // closed connection handled by close listener
+    }
+  }, 25000);
+  heartbeat.unref?.();
+
+  writeSseEvent(res, "connected", { ok: true, userId, connectedAt: new Date().toISOString() });
+  try {
+    await ensureGoalReminderNotificationsForUser(userId);
+  } catch (error) {
+    console.warn(
+      `Unable to preload goal reminders for SSE stream user ${userId}. ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+
+  const onClose = () => {
+    clearInterval(heartbeat);
+    removeClient();
+  };
+
+  req.on("close", onClose);
+  req.on("error", onClose);
+  return undefined;
+});
+
 app.get("/api/groups/:groupId", authMiddleware, async (req, res) => {
   try {
     const userId = req.auth?.sub;
@@ -4089,6 +4912,8 @@ try {
     throw error;
   }
 }
+
+startGoalReminderJob();
 
 app.listen(PORT, () => {
   console.log(`Auth backend listening on http://localhost:${PORT}`);

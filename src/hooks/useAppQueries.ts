@@ -119,6 +119,47 @@ export function useWallet() {
   });
 }
 
+export function useNotifications() {
+  const { notificationService } = useServices();
+  return useQuery({
+    queryKey: ["notifications"],
+    queryFn: () => notificationService.getNotifications(200)
+  });
+}
+
+export function useDismissNotification() {
+  const { notificationService } = useServices();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (notificationId: string) => notificationService.dismissNotification(notificationId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    }
+  });
+}
+
+export function useMarkNotificationRead() {
+  const { notificationService } = useServices();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (notificationId: string) => notificationService.markNotificationRead(notificationId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    }
+  });
+}
+
+export function useMarkAllNotificationsRead() {
+  const { notificationService } = useServices();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => notificationService.markAllNotificationsRead(),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    }
+  });
+}
+
 export function useSettlementLogs() {
   const { settlementService } = useServices();
   return useQuery({
