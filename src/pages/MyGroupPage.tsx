@@ -14,6 +14,7 @@ import type { GroupActivityMember, GroupGoalCycle, GroupGoalStartDay } from "../
 import { centsToUsd, dateTimeWithYearLabel } from "../utils/format";
 import { useAuth } from "../app/AuthContext";
 import { clearLastOpenedGroupId, setLastOpenedGroupId } from "../utils/groupNavigation";
+import { GroupChatCard } from "../components/GroupChatCard";
 
 function initials(name: string): string {
   const parts = name
@@ -831,6 +832,8 @@ export function MyGroupPage() {
           </table>
         </div>
       </section>
+
+      {groupId ? <GroupChatCard groupId={groupId} /> : null}
 
     </div>
   );

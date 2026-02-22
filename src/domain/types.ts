@@ -109,6 +109,36 @@ export interface GroupActivitySnapshot {
   members: GroupActivityMember[];
 }
 
+export interface GroupChatSender {
+  userId: string;
+  name: string;
+  avatarUrl?: string | null;
+}
+
+export interface GroupChatReplyPreview {
+  id: string;
+  body: string;
+  senderName: string;
+}
+
+export interface GroupChatReaction {
+  emoji: string;
+  count: number;
+  reactedByCurrentUser: boolean;
+}
+
+export interface GroupChatMessage {
+  id: string;
+  groupId: string;
+  userId: string;
+  body: string;
+  createdAt: string;
+  replyToMessageId: string | null;
+  replyTo: GroupChatReplyPreview | null;
+  sender: GroupChatSender;
+  reactions: GroupChatReaction[];
+}
+
 export interface PendingGroupInvite {
   id: string;
   groupId: string;

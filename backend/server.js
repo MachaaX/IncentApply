@@ -55,6 +55,10 @@ const ENTRA_SCOPES = process.env.ENTRA_SCOPES ?? "openid profile email";
 const GROUP_NAME_MAX_LENGTH = 30;
 const INVITE_EXPIRY_MS = 24 * 60 * 60 * 1000;
 const MAX_AVATAR_DATA_URL_LENGTH = 60000;
+const MAX_CHAT_MESSAGE_LENGTH = 1000;
+const MAX_CHAT_REACTION_EMOJI_LENGTH = 16;
+const CHAT_MESSAGE_RETENTION_DAYS = 7;
+const CHAT_CLEANUP_JOB_INTERVAL_MS = 60 * 60 * 1000;
 const DEFAULT_GOAL_CYCLE = "weekly";
 const ALLOWED_GOAL_CYCLES = new Set(["daily", "weekly", "biweekly"]);
 const DEFAULT_GOAL_START_DAY = "monday";
@@ -85,6 +89,8 @@ const volatileMemberCycleCounts = new Map();
 const notificationSseClientsByUserId = new Map();
 let goalReminderJobInterval = null;
 let goalReminderJobRunning = false;
+let chatCleanupJobInterval = null;
+let chatCleanupJobRunning = false;
 const entraConfiguredExplicitly = Boolean(
   ENTRA_CLIENT_ID || ENTRA_CLIENT_SECRET || ENTRA_REDIRECT_URI || ENTRA_DISCOVERY_URL
 );
@@ -587,6 +593,41 @@ async function initDb() {
     `);
 
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS group_chat_messages (
+        id VARCHAR(191) PRIMARY KEY,
+        group_id VARCHAR(191) NOT NULL,
+        user_id VARCHAR(191) NOT NULL,
+        body TEXT NOT NULL,
+        reply_to_message_id VARCHAR(191) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT fk_group_chat_messages_group
+          FOREIGN KEY (group_id) REFERENCES app_groups(id) ON DELETE CASCADE,
+        CONSTRAINT fk_group_chat_messages_user
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        CONSTRAINT fk_group_chat_messages_reply
+          FOREIGN KEY (reply_to_message_id) REFERENCES group_chat_messages(id) ON DELETE SET NULL,
+        KEY group_chat_messages_group_created_idx (group_id, created_at),
+        KEY group_chat_messages_reply_idx (reply_to_message_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS group_chat_message_reactions (
+        message_id VARCHAR(191) NOT NULL,
+        user_id VARCHAR(191) NOT NULL,
+        emoji VARCHAR(32) NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (message_id, user_id, emoji),
+        CONSTRAINT fk_group_chat_reactions_message
+          FOREIGN KEY (message_id) REFERENCES group_chat_messages(id) ON DELETE CASCADE,
+        CONSTRAINT fk_group_chat_reactions_user
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        KEY group_chat_reactions_message_idx (message_id),
+        KEY group_chat_reactions_user_idx (user_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS app_notification_dismissals (
         user_id VARCHAR(191) NOT NULL,
         dedupe_key VARCHAR(255) NOT NULL,
@@ -811,6 +852,27 @@ async function initDb() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS group_chat_messages (
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL REFERENCES app_groups(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      body TEXT NOT NULL,
+      reply_to_message_id TEXT REFERENCES group_chat_messages(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS group_chat_message_reactions (
+      message_id TEXT NOT NULL REFERENCES group_chat_messages(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      emoji TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (message_id, user_id, emoji)
+    );
+  `);
+
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS group_members_user_idx
     ON group_members(user_id);
   `);
@@ -853,6 +915,21 @@ async function initDb() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS app_notifications_user_read_idx
     ON app_notifications(user_id, read_at);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS group_chat_messages_group_created_idx
+    ON group_chat_messages(group_id, created_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS group_chat_messages_reply_idx
+    ON group_chat_messages(reply_to_message_id);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS group_chat_reactions_message_idx
+    ON group_chat_message_reactions(message_id);
   `);
 
   if (memberCycleCountsStoreMode === "database") {
@@ -949,6 +1026,27 @@ function normalizeInviteCode(value) {
   }
 
   return compact;
+}
+
+function normalizeChatMessageBody(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  return value.trim();
+}
+
+function normalizeChatReactionEmoji(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > MAX_CHAT_REACTION_EMOJI_LENGTH) {
+    return "";
+  }
+  if (/\s/.test(trimmed)) {
+    return "";
+  }
+  return trimmed;
 }
 
 function buildAuthResponse(user) {
@@ -1323,6 +1421,60 @@ function toSettlementLog(row) {
   };
 }
 
+function buildDisplayNameFromColumns(firstNameValue, lastNameValue, emailValue, fallback = "Member") {
+  const firstName = String(firstNameValue ?? "").trim();
+  const lastName = String(lastNameValue ?? "").trim();
+  const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
+  if (fullName) {
+    return fullName;
+  }
+  const email = String(emailValue ?? "").trim();
+  if (email) {
+    return email;
+  }
+  return fallback;
+}
+
+function toGroupChatMessage(row, reactions = []) {
+  const replyToMessageId = row.reply_to_message_id ? String(row.reply_to_message_id) : null;
+  const replyToId = row.reply_id ? String(row.reply_id) : replyToMessageId;
+  const replyBody = String(row.reply_body ?? "").trim();
+  const replyTo =
+    replyToId && replyBody
+      ? {
+          id: replyToId,
+          body: replyBody,
+          senderName: buildDisplayNameFromColumns(
+            row.reply_sender_first_name,
+            row.reply_sender_last_name,
+            row.reply_sender_email,
+            "Member"
+          )
+        }
+      : null;
+
+  return {
+    id: String(row.id ?? ""),
+    groupId: String(row.group_id ?? ""),
+    userId: String(row.user_id ?? ""),
+    body: String(row.body ?? ""),
+    createdAt: asIsoTimestamp(row.created_at),
+    replyToMessageId,
+    replyTo,
+    sender: {
+      userId: String(row.user_id ?? ""),
+      name: buildDisplayNameFromColumns(
+        row.sender_first_name,
+        row.sender_last_name,
+        row.sender_email,
+        "Member"
+      ),
+      avatarUrl: row.sender_avatar_url ?? null
+    },
+    reactions
+  };
+}
+
 function parseNotificationPayload(value) {
   if (!value) {
     return null;
@@ -1623,6 +1775,252 @@ async function getGroupMembersWithProfiles(groupId) {
     [groupId]
   );
   return result.rows;
+}
+
+function normalizeGroupChatLimit(limit) {
+  const parsed = Number(limit);
+  if (!Number.isFinite(parsed)) {
+    return 200;
+  }
+  return Math.max(1, Math.min(400, Math.floor(parsed)));
+}
+
+async function getGroupChatMessageById(groupId, messageId) {
+  const cutoff = chatRetentionCutoff(new Date());
+  const result = await pool.query(
+    `
+      SELECT
+        m.id,
+        m.group_id,
+        m.user_id,
+        m.body,
+        m.reply_to_message_id,
+        m.created_at,
+        sender.first_name AS sender_first_name,
+        sender.last_name AS sender_last_name,
+        sender.email AS sender_email,
+        sender.avatar_url AS sender_avatar_url,
+        reply.id AS reply_id,
+        reply.body AS reply_body,
+        reply_sender.first_name AS reply_sender_first_name,
+        reply_sender.last_name AS reply_sender_last_name,
+        reply_sender.email AS reply_sender_email
+      FROM group_chat_messages m
+      INNER JOIN users sender
+        ON sender.id = m.user_id
+      LEFT JOIN group_chat_messages reply
+        ON reply.id = m.reply_to_message_id
+      LEFT JOIN users reply_sender
+        ON reply_sender.id = reply.user_id
+      WHERE m.group_id = $1
+        AND m.id = $2
+        AND m.created_at >= $3
+      LIMIT 1
+    `,
+    [groupId, messageId, cutoff]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function getChatReactionsByMessageIds(messageIds, currentUserId) {
+  if (!Array.isArray(messageIds) || !messageIds.length) {
+    return new Map();
+  }
+
+  const placeholders = messageIds.map((_, index) => `$${index + 1}`).join(", ");
+  const result = await pool.query(
+    `
+      SELECT
+        message_id,
+        user_id,
+        emoji
+      FROM group_chat_message_reactions
+      WHERE message_id IN (${placeholders})
+    `,
+    messageIds
+  );
+
+  const grouped = new Map();
+  for (const row of result.rows) {
+    const messageId = String(row.message_id ?? "");
+    const emoji = String(row.emoji ?? "");
+    if (!messageId || !emoji) {
+      continue;
+    }
+    if (!grouped.has(messageId)) {
+      grouped.set(messageId, new Map());
+    }
+    const byEmoji = grouped.get(messageId);
+    const bucket = byEmoji.get(emoji) ?? { emoji, count: 0, reactedByCurrentUser: false };
+    bucket.count += 1;
+    if (String(row.user_id ?? "") === currentUserId) {
+      bucket.reactedByCurrentUser = true;
+    }
+    byEmoji.set(emoji, bucket);
+  }
+
+  const reactionsByMessageId = new Map();
+  for (const [messageId, byEmoji] of grouped.entries()) {
+    const reactions = [...byEmoji.values()].sort((left, right) => {
+      if (right.count !== left.count) {
+        return right.count - left.count;
+      }
+      return left.emoji.localeCompare(right.emoji);
+    });
+    reactionsByMessageId.set(messageId, reactions);
+  }
+
+  return reactionsByMessageId;
+}
+
+async function listGroupChatMessages(groupId, currentUserId, limit = 200) {
+  const safeLimit = normalizeGroupChatLimit(limit);
+  const cutoff = chatRetentionCutoff(new Date());
+  const result = await pool.query(
+    `
+      SELECT
+        m.id,
+        m.group_id,
+        m.user_id,
+        m.body,
+        m.reply_to_message_id,
+        m.created_at,
+        sender.first_name AS sender_first_name,
+        sender.last_name AS sender_last_name,
+        sender.email AS sender_email,
+        sender.avatar_url AS sender_avatar_url,
+        reply.id AS reply_id,
+        reply.body AS reply_body,
+        reply_sender.first_name AS reply_sender_first_name,
+        reply_sender.last_name AS reply_sender_last_name,
+        reply_sender.email AS reply_sender_email
+      FROM group_chat_messages m
+      INNER JOIN users sender
+        ON sender.id = m.user_id
+      LEFT JOIN group_chat_messages reply
+        ON reply.id = m.reply_to_message_id
+      LEFT JOIN users reply_sender
+        ON reply_sender.id = reply.user_id
+      WHERE m.group_id = $1
+        AND m.created_at >= $2
+      ORDER BY m.created_at DESC, m.id DESC
+      LIMIT $3
+    `,
+    [groupId, cutoff, safeLimit]
+  );
+
+  const rowsNewestFirst = result.rows;
+  const rows = [...rowsNewestFirst].reverse();
+  const messageIds = rows.map((row) => String(row.id ?? "")).filter((id) => id.length > 0);
+  const reactionsByMessageId = await getChatReactionsByMessageIds(messageIds, currentUserId);
+
+  return rows.map((row) =>
+    toGroupChatMessage(row, reactionsByMessageId.get(String(row.id ?? "")) ?? [])
+  );
+}
+
+async function createGroupChatMessage({
+  groupId,
+  userId,
+  body,
+  replyToMessageId = null
+}) {
+  const normalizedBody = normalizeChatMessageBody(body);
+  if (!normalizedBody) {
+    throw new HttpError(400, "Message cannot be empty.");
+  }
+  if (normalizedBody.length > MAX_CHAT_MESSAGE_LENGTH) {
+    throw new HttpError(400, `Message cannot exceed ${MAX_CHAT_MESSAGE_LENGTH} characters.`);
+  }
+
+  let normalizedReplyToMessageId = null;
+  if (replyToMessageId) {
+    normalizedReplyToMessageId = String(replyToMessageId).trim();
+    if (!normalizedReplyToMessageId) {
+      normalizedReplyToMessageId = null;
+    }
+  }
+
+  if (normalizedReplyToMessageId) {
+    const replyTarget = await getGroupChatMessageById(groupId, normalizedReplyToMessageId);
+    if (!replyTarget) {
+      throw new HttpError(404, "Reply target message not found.");
+    }
+  }
+
+  const messageId = randomUUID();
+  await pool.query(
+    `
+      INSERT INTO group_chat_messages (
+        id,
+        group_id,
+        user_id,
+        body,
+        reply_to_message_id
+      )
+      VALUES ($1, $2, $3, $4, $5)
+    `,
+    [messageId, groupId, userId, normalizedBody, normalizedReplyToMessageId]
+  );
+
+  const created = await getGroupChatMessageById(groupId, messageId);
+  if (!created) {
+    throw new Error("Unable to load created chat message.");
+  }
+
+  return toGroupChatMessage(created, []);
+}
+
+async function toggleGroupChatReaction({ groupId, messageId, userId, emoji }) {
+  const normalizedEmoji = normalizeChatReactionEmoji(emoji);
+  if (!normalizedEmoji) {
+    throw new HttpError(400, "Emoji is required.");
+  }
+
+  const message = await getGroupChatMessageById(groupId, messageId);
+  if (!message) {
+    throw new HttpError(404, "Message not found.");
+  }
+
+  const existing = await pool.query(
+    `
+      SELECT 1
+      FROM group_chat_message_reactions
+      WHERE message_id = $1
+        AND user_id = $2
+        AND emoji = $3
+      LIMIT 1
+    `,
+    [messageId, userId, normalizedEmoji]
+  );
+
+  if (existing.rows.length) {
+    await pool.query(
+      `
+        DELETE FROM group_chat_message_reactions
+        WHERE message_id = $1
+          AND user_id = $2
+          AND emoji = $3
+      `,
+      [messageId, userId, normalizedEmoji]
+    );
+    return { messageId, emoji: normalizedEmoji, reacted: false };
+  }
+
+  await pool.query(
+    `
+      INSERT INTO group_chat_message_reactions (
+        message_id,
+        user_id,
+        emoji
+      )
+      VALUES ($1, $2, $3)
+    `,
+    [messageId, userId, normalizedEmoji]
+  );
+
+  return { messageId, emoji: normalizedEmoji, reacted: true };
 }
 
 async function getCycleCountsForGroup(groupId, cycleKey) {
@@ -2652,6 +3050,52 @@ function startGoalReminderJob() {
     void runGoalReminderJob();
   }, GOAL_REMINDER_JOB_INTERVAL_MS);
   goalReminderJobInterval.unref?.();
+}
+
+function chatRetentionCutoff(referenceDate = new Date()) {
+  const nowMs = referenceDate instanceof Date ? referenceDate.getTime() : Date.now();
+  return new Date(nowMs - CHAT_MESSAGE_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+}
+
+async function purgeExpiredGroupChatMessages(referenceDate = new Date()) {
+  const cutoff = chatRetentionCutoff(referenceDate);
+  const deleted = await pool.query(
+    `
+      DELETE FROM group_chat_messages
+      WHERE created_at < $1
+    `,
+    [cutoff]
+  );
+
+  return Math.max(0, Number(deleted.rowCount ?? 0));
+}
+
+async function runChatCleanupJob() {
+  if (chatCleanupJobRunning) {
+    return;
+  }
+  chatCleanupJobRunning = true;
+  try {
+    await purgeExpiredGroupChatMessages(new Date());
+  } catch (error) {
+    console.warn(
+      `Chat cleanup job failed. ${error instanceof Error ? error.message : String(error)}`
+    );
+  } finally {
+    chatCleanupJobRunning = false;
+  }
+}
+
+function startChatCleanupJob() {
+  if (chatCleanupJobInterval) {
+    return;
+  }
+
+  void runChatCleanupJob();
+  chatCleanupJobInterval = setInterval(() => {
+    void runChatCleanupJob();
+  }, CHAT_CLEANUP_JOB_INTERVAL_MS);
+  chatCleanupJobInterval.unref?.();
 }
 
 function normalizeNotificationLimit(limit) {
@@ -4672,6 +5116,113 @@ app.patch("/api/groups/:groupId/members/:memberId/count", authMiddleware, async 
   }
 });
 
+app.get("/api/groups/:groupId/chat/messages", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    if (!userId) {
+      return res.status(401).json({ error: "Missing user identity." });
+    }
+
+    const groupId = String(req.params.groupId ?? "").trim();
+    if (!groupId) {
+      return res.status(400).json({ error: "Group id is required." });
+    }
+
+    await purgeExpiredGroupChatMessages(new Date());
+
+    const isMember = await isMemberInGroup(groupId, userId);
+    if (!isMember) {
+      return res.status(404).json({ error: "Group not found." });
+    }
+
+    const requestedLimit = typeof req.query.limit === "string" ? Number(req.query.limit) : 200;
+    const messages = await listGroupChatMessages(groupId, userId, requestedLimit);
+    return res.status(200).json({ messages });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to fetch group chat messages."
+    });
+  }
+});
+
+app.post("/api/groups/:groupId/chat/messages", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.auth?.sub;
+    if (!userId) {
+      return res.status(401).json({ error: "Missing user identity." });
+    }
+
+    const groupId = String(req.params.groupId ?? "").trim();
+    if (!groupId) {
+      return res.status(400).json({ error: "Group id is required." });
+    }
+
+    await purgeExpiredGroupChatMessages(new Date());
+
+    const isMember = await isMemberInGroup(groupId, userId);
+    if (!isMember) {
+      return res.status(404).json({ error: "Group not found." });
+    }
+
+    const body = typeof req.body?.body === "string" ? req.body.body : "";
+    const replyToMessageId =
+      typeof req.body?.replyToMessageId === "string" ? req.body.replyToMessageId : null;
+    const message = await createGroupChatMessage({
+      groupId,
+      userId,
+      body,
+      replyToMessageId
+    });
+
+    return res.status(201).json({ message });
+  } catch (error) {
+    const statusCode = error instanceof HttpError ? error.statusCode : 500;
+    return res.status(statusCode).json({
+      error: error instanceof Error ? error.message : "Unable to create group chat message."
+    });
+  }
+});
+
+app.post(
+  "/api/groups/:groupId/chat/messages/:messageId/reactions",
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const userId = req.auth?.sub;
+      if (!userId) {
+        return res.status(401).json({ error: "Missing user identity." });
+      }
+
+      const groupId = String(req.params.groupId ?? "").trim();
+      const messageId = String(req.params.messageId ?? "").trim();
+      if (!groupId || !messageId) {
+        return res.status(400).json({ error: "Group id and message id are required." });
+      }
+
+      await purgeExpiredGroupChatMessages(new Date());
+
+      const isMember = await isMemberInGroup(groupId, userId);
+      if (!isMember) {
+        return res.status(404).json({ error: "Group not found." });
+      }
+
+      const emoji = typeof req.body?.emoji === "string" ? req.body.emoji : "";
+      const result = await toggleGroupChatReaction({
+        groupId,
+        messageId,
+        userId,
+        emoji
+      });
+      return res.status(200).json(result);
+    } catch (error) {
+      const statusCode = error instanceof HttpError ? error.statusCode : 500;
+      return res.status(statusCode).json({
+        error: error instanceof Error ? error.message : "Unable to react to message."
+      });
+    }
+  }
+);
+
 app.get("/api/applications/counter-logs", authMiddleware, async (req, res) => {
   try {
     const userId = req.auth?.sub;
@@ -4914,6 +5465,7 @@ try {
 }
 
 startGoalReminderJob();
+startChatCleanupJob();
 
 app.listen(PORT, () => {
   console.log(`Auth backend listening on http://localhost:${PORT}`);

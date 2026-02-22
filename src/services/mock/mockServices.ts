@@ -7,6 +7,7 @@ import type {
   CounterApplicationLog,
   Group,
   GroupActivitySnapshot,
+  GroupChatMessage,
   GroupGoalStartDay,
   MyGroupSummary,
   PendingGroupInvite,
@@ -154,6 +155,50 @@ interface BackendGroupActivitySnapshot {
   }>;
 }
 
+interface BackendGroupChatSender {
+  userId: string;
+  name: string;
+  avatarUrl?: string | null;
+}
+
+interface BackendGroupChatReplyPreview {
+  id: string;
+  body: string;
+  senderName: string;
+}
+
+interface BackendGroupChatReaction {
+  emoji: string;
+  count: number;
+  reactedByCurrentUser: boolean;
+}
+
+interface BackendGroupChatMessage {
+  id: string;
+  groupId: string;
+  userId: string;
+  body: string;
+  createdAt: string;
+  replyToMessageId: string | null;
+  replyTo: BackendGroupChatReplyPreview | null;
+  sender: BackendGroupChatSender;
+  reactions: BackendGroupChatReaction[];
+}
+
+interface BackendGroupChatMessagesResponse {
+  messages: BackendGroupChatMessage[];
+}
+
+interface BackendGroupChatMessageResponse {
+  message: BackendGroupChatMessage;
+}
+
+interface BackendToggleGroupChatReactionResponse {
+  messageId: string;
+  emoji: string;
+  reacted: boolean;
+}
+
 interface BackendMemberCountUpdateResponse {
   memberId: string;
   applicationsCount: number;
@@ -283,8 +328,10 @@ const localGroupSettingsOverride = new Map<
 >();
 
 const localManualCycleCounts = new Map<string, number>();
+const localGroupChatMessages = new Map<string, GroupChatMessage[]>();
 const localNotificationsByUserId = new Map<string, AppNotification[]>();
 const localNotificationSubscribers = new Set<() => void>();
+const CHAT_MESSAGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 function getLocalNotificationsForUser(userId: string): AppNotification[] {
   const existing = localNotificationsByUserId.get(userId);
@@ -387,6 +434,36 @@ function mapBackendGroupActivity(entry: BackendGroupActivitySnapshot): GroupActi
       goal: Math.max(0, Number(member.goal ?? 0)),
       status: member.status
     }))
+  };
+}
+
+function mapBackendGroupChatMessage(entry: BackendGroupChatMessage): GroupChatMessage {
+  return {
+    id: String(entry.id ?? ""),
+    groupId: String(entry.groupId ?? ""),
+    userId: String(entry.userId ?? ""),
+    body: String(entry.body ?? ""),
+    createdAt: String(entry.createdAt ?? new Date().toISOString()),
+    replyToMessageId: entry.replyToMessageId ? String(entry.replyToMessageId) : null,
+    replyTo: entry.replyTo
+      ? {
+          id: String(entry.replyTo.id ?? ""),
+          body: String(entry.replyTo.body ?? ""),
+          senderName: String(entry.replyTo.senderName ?? "")
+        }
+      : null,
+    sender: {
+      userId: String(entry.sender?.userId ?? ""),
+      name: String(entry.sender?.name ?? "Member"),
+      avatarUrl: entry.sender?.avatarUrl ?? null
+    },
+    reactions: Array.isArray(entry.reactions)
+      ? entry.reactions.map((reaction) => ({
+          emoji: String(reaction.emoji ?? ""),
+          count: Math.max(0, Number(reaction.count ?? 0)),
+          reactedByCurrentUser: Boolean(reaction.reactedByCurrentUser)
+        }))
+      : []
   };
 }
 
@@ -1307,6 +1384,204 @@ function appendActivity(state: ReturnType<typeof getState>, item: Omit<ActivityI
   });
 }
 
+function pruneLocalGroupChatMessages(groupId: string): GroupChatMessage[] {
+  const current = localGroupChatMessages.get(groupId) ?? [];
+  if (!current.length) {
+    return current;
+  }
+
+  const cutoffMs = Date.now() - CHAT_MESSAGE_RETENTION_MS;
+  const next = current.filter((entry) => new Date(entry.createdAt).getTime() >= cutoffMs);
+  if (next.length !== current.length) {
+    localGroupChatMessages.set(groupId, next);
+  }
+  return next;
+}
+
+function ensureLocalGroupChatMessages(groupId: string): GroupChatMessage[] {
+  if (localGroupChatMessages.has(groupId)) {
+    const existing = pruneLocalGroupChatMessages(groupId);
+    return existing;
+  }
+  const seeded: GroupChatMessage[] = [];
+  localGroupChatMessages.set(groupId, seeded);
+  return seeded;
+}
+
+function localChatSenderForUser(userId: string): GroupChatMessage["sender"] {
+  const state = getState();
+  const user = state.users.find((entry) => entry.id === userId);
+  if (!user) {
+    return {
+      userId,
+      name: "Member",
+      avatarUrl: null
+    };
+  }
+  const displayName = `${user.firstName} ${user.lastName}`.trim() || user.email;
+  return {
+    userId: user.id,
+    name: displayName,
+    avatarUrl: user.avatarUrl ?? null
+  };
+}
+
+function localListGroupChatMessages(groupId: string): GroupChatMessage[] {
+  const state = getState();
+  const sessionUserId = state.session?.userId;
+  if (!sessionUserId || !state.group.memberIds.includes(sessionUserId)) {
+    throw new Error("Group not found.");
+  }
+  if (state.group.id !== groupId) {
+    throw new Error("Group not found.");
+  }
+
+  const messages = [...ensureLocalGroupChatMessages(groupId)];
+  return messages.sort(
+    (left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+  );
+}
+
+function localSendGroupChatMessage(input: {
+  groupId: string;
+  body: string;
+  replyToMessageId?: string | null;
+}): GroupChatMessage {
+  const state = getState();
+  const sessionUserId = state.session?.userId;
+  if (!sessionUserId || !state.group.memberIds.includes(sessionUserId)) {
+    throw new Error("Group not found.");
+  }
+  if (state.group.id !== input.groupId) {
+    throw new Error("Group not found.");
+  }
+
+  const body = input.body.trim();
+  if (!body) {
+    throw new Error("Message cannot be empty.");
+  }
+  if (body.length > 1000) {
+    throw new Error("Message cannot exceed 1000 characters.");
+  }
+
+  const messages = ensureLocalGroupChatMessages(input.groupId);
+  const replyToMessageId = (input.replyToMessageId ?? "").trim() || null;
+  const replyTarget = replyToMessageId
+    ? messages.find((entry) => entry.id === replyToMessageId) ?? null
+    : null;
+
+  if (replyToMessageId && !replyTarget) {
+    throw new Error("Reply target message not found.");
+  }
+
+  const createdAt = new Date().toISOString();
+  const message: GroupChatMessage = {
+    id: `chat-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
+    groupId: input.groupId,
+    userId: sessionUserId,
+    body,
+    createdAt,
+    replyToMessageId,
+    replyTo: replyTarget
+      ? {
+          id: replyTarget.id,
+          body: replyTarget.body,
+          senderName: replyTarget.sender.name
+        }
+      : null,
+    sender: localChatSenderForUser(sessionUserId),
+    reactions: []
+  };
+
+  localGroupChatMessages.set(input.groupId, [...messages, message]);
+  return message;
+}
+
+function localToggleGroupChatReaction(input: {
+  groupId: string;
+  messageId: string;
+  emoji: string;
+}): { messageId: string; emoji: string; reacted: boolean } {
+  const state = getState();
+  const sessionUserId = state.session?.userId;
+  if (!sessionUserId || !state.group.memberIds.includes(sessionUserId)) {
+    throw new Error("Group not found.");
+  }
+  if (state.group.id !== input.groupId) {
+    throw new Error("Group not found.");
+  }
+
+  const emoji = input.emoji.trim();
+  if (!emoji) {
+    throw new Error("Emoji is required.");
+  }
+
+  let reacted = false;
+  const next = ensureLocalGroupChatMessages(input.groupId).map((message) => {
+    if (message.id !== input.messageId) {
+      return message;
+    }
+
+    const existingReaction = message.reactions.find((entry) => entry.emoji === emoji);
+    if (existingReaction?.reactedByCurrentUser) {
+      reacted = false;
+      const nextCount = Math.max(0, existingReaction.count - 1);
+      const filtered = message.reactions
+        .map((entry) =>
+          entry.emoji === emoji
+            ? {
+                ...entry,
+                count: nextCount,
+                reactedByCurrentUser: false
+              }
+            : entry
+        )
+        .filter((entry) => entry.count > 0);
+      return { ...message, reactions: filtered };
+    }
+
+    reacted = true;
+    if (existingReaction) {
+      return {
+        ...message,
+        reactions: message.reactions.map((entry) =>
+          entry.emoji === emoji
+            ? {
+                ...entry,
+                count: entry.count + 1,
+                reactedByCurrentUser: true
+              }
+            : entry
+        )
+      };
+    }
+
+    return {
+      ...message,
+      reactions: [
+        ...message.reactions,
+        {
+          emoji,
+          count: 1,
+          reactedByCurrentUser: true
+        }
+      ]
+    };
+  });
+
+  const hasMessage = next.some((message) => message.id === input.messageId);
+  if (!hasMessage) {
+    throw new Error("Message not found.");
+  }
+
+  localGroupChatMessages.set(input.groupId, next);
+  return {
+    messageId: input.messageId,
+    emoji,
+    reacted
+  };
+}
+
 function localLoginWithGoogle(email?: string): AuthSession {
   const state = getState();
   const normalizedEmail = (email ?? "").trim().toLowerCase();
@@ -2140,6 +2415,80 @@ const groupService: GroupService = {
           memberId: input.memberId,
           applicationsCount: nextValue
         });
+      }
+      throw error;
+    }
+  },
+
+  async getGroupChatMessages(groupId) {
+    if (!backendAuthEnabled()) {
+      return withLatency(localListGroupChatMessages(groupId));
+    }
+
+    try {
+      const payload = await backendRequest<BackendGroupChatMessagesResponse>(
+        `/api/groups/${groupId}/chat/messages?limit=200`,
+        {
+          method: "GET"
+        }
+      );
+      return withLatency(payload.messages.map((entry) => mapBackendGroupChatMessage(entry)));
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        return withLatency(localListGroupChatMessages(groupId));
+      }
+      throw error;
+    }
+  },
+
+  async sendGroupChatMessage(input) {
+    if (!backendAuthEnabled()) {
+      return withLatency(localSendGroupChatMessage(input));
+    }
+
+    try {
+      const payload = await backendRequest<BackendGroupChatMessageResponse>(
+        `/api/groups/${input.groupId}/chat/messages`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            body: input.body,
+            replyToMessageId: input.replyToMessageId ?? null
+          })
+        }
+      );
+      return withLatency(mapBackendGroupChatMessage(payload.message));
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        return withLatency(localSendGroupChatMessage(input));
+      }
+      throw error;
+    }
+  },
+
+  async toggleGroupChatReaction(input) {
+    if (!backendAuthEnabled()) {
+      return withLatency(localToggleGroupChatReaction(input));
+    }
+
+    try {
+      const payload = await backendRequest<BackendToggleGroupChatReactionResponse>(
+        `/api/groups/${input.groupId}/chat/messages/${input.messageId}/reactions`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            emoji: input.emoji
+          })
+        }
+      );
+      return withLatency({
+        messageId: String(payload.messageId ?? input.messageId),
+        emoji: String(payload.emoji ?? input.emoji),
+        reacted: Boolean(payload.reacted)
+      });
+    } catch (error) {
+      if (shouldFallbackToMock(error)) {
+        return withLatency(localToggleGroupChatReaction(input));
       }
       throw error;
     }

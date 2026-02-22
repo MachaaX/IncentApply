@@ -43,6 +43,16 @@ export function useGroupActivity(groupId?: string) {
   });
 }
 
+export function useGroupChatMessages(groupId?: string) {
+  const { groupService } = useServices();
+  return useQuery({
+    enabled: Boolean(groupId),
+    queryKey: ["group-chat-messages", groupId],
+    queryFn: () => groupService.getGroupChatMessages(groupId ?? ""),
+    refetchInterval: 3000
+  });
+}
+
 export function useMembers() {
   const { groupService } = useServices();
   return useQuery({
@@ -236,6 +246,30 @@ export function useUpdateGroupGoal() {
       void queryClient.invalidateQueries({ queryKey: ["group"] });
       void queryClient.invalidateQueries({ queryKey: ["leaderboard"] });
       void queryClient.invalidateQueries({ queryKey: ["member-progress"] });
+    }
+  });
+}
+
+export function useSendGroupChatMessage() {
+  const { groupService } = useServices();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { groupId: string; body: string; replyToMessageId?: string | null }) =>
+      groupService.sendGroupChatMessage(input),
+    onSuccess: (_, input) => {
+      void queryClient.invalidateQueries({ queryKey: ["group-chat-messages", input.groupId] });
+    }
+  });
+}
+
+export function useToggleGroupChatReaction() {
+  const { groupService } = useServices();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { groupId: string; messageId: string; emoji: string }) =>
+      groupService.toggleGroupChatReaction(input),
+    onSuccess: (_, input) => {
+      void queryClient.invalidateQueries({ queryKey: ["group-chat-messages", input.groupId] });
     }
   });
 }

@@ -9,6 +9,7 @@ import type {
   GmailSyncState,
   Group,
   GroupGoalStartDay,
+  GroupChatMessage,
   MyGroupSummary,
   PendingGroupInvite,
   LeaderboardEntry,
@@ -85,6 +86,17 @@ export interface GroupService {
     delta?: number;
     applicationsCount?: number;
   }): Promise<{ memberId: string; applicationsCount: number }>;
+  getGroupChatMessages(groupId: string): Promise<GroupChatMessage[]>;
+  sendGroupChatMessage(input: {
+    groupId: string;
+    body: string;
+    replyToMessageId?: string | null;
+  }): Promise<GroupChatMessage>;
+  toggleGroupChatReaction(input: {
+    groupId: string;
+    messageId: string;
+    emoji: string;
+  }): Promise<{ messageId: string; emoji: string; reacted: boolean }>;
 }
 
 export interface ApplicationService {
